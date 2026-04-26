@@ -1,0 +1,1182 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>SQL Web Tool — UI 设计稿</title>
+  <style>
+    :root {
+      --bg-app: #1a1d23;
+      --bg-panel: #22262e;
+      --bg-elevated: #2a2f38;
+      --bg-hover: #323842;
+      --border: #3d4450;
+      --text: #e6e8ec;
+      --text-muted: #8b929e;
+      --accent: #3b82f6;
+      --accent-dim: rgba(59, 130, 246, 0.15);
+      --success: #22c55e;
+      --warning: #eab308;
+      --danger: #ef4444;
+      --font: "Segoe UI", "Microsoft YaHei UI", system-ui, sans-serif;
+      --mono: "Cascadia Code", "Consolas", "Microsoft YaHei Mono", monospace;
+      --sidebar-w: 300px;
+      --radius: 8px;
+      --tooltip-bg: #0f1115;
+      --tooltip-border: #4b5563;
+      --menubar-h: 30px;
+      --titlebar-h: 40px;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      margin: 0;
+      height: 100%;
+      font-family: var(--font);
+      font-size: 13px;
+      color: var(--text);
+      background: var(--bg-app);
+    }
+
+    [data-tip] { position: relative; cursor: default; }
+
+    [data-tip]::after {
+      content: attr(data-tip);
+      position: absolute;
+      left: 50%;
+      bottom: calc(100% + 8px);
+      transform: translateX(-50%) translateY(4px);
+      padding: 8px 10px;
+      max-width: 280px;
+      width: max-content;
+      font-size: 11px;
+      line-height: 1.45;
+      color: var(--text);
+      background: var(--tooltip-bg);
+      border: 1px solid var(--tooltip-border);
+      border-radius: 6px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+      white-space: normal;
+      text-align: left;
+      pointer-events: none;
+      opacity: 0;
+      visibility: hidden;
+      transition: opacity 0.15s ease, transform 0.15s ease, visibility 0.15s;
+      z-index: 5000;
+    }
+
+    [data-tip]::before {
+      content: "";
+      position: absolute;
+      left: 50%;
+      bottom: calc(100% + 2px);
+      transform: translateX(-50%);
+      border: 6px solid transparent;
+      border-top-color: var(--tooltip-border);
+      opacity: 0;
+      visibility: hidden;
+      z-index: 5001;
+    }
+
+    [data-tip]:hover::after,
+    [data-tip]:hover::before {
+      opacity: 1;
+      visibility: visible;
+    }
+
+    [data-tip]:hover::after { transform: translateX(-50%) translateY(0); }
+
+    [data-tip-pos="bottom"]::after {
+      top: calc(100% + 8px);
+      bottom: auto;
+      left: 0;
+      transform: translateY(4px);
+      margin-top: 4px;
+    }
+
+    [data-tip-pos="bottom"]:hover::after { transform: translateY(0); }
+
+    [data-tip-pos="bottom"]::before {
+      top: calc(100% + 2px);
+      bottom: auto;
+      left: 12px;
+      transform: none;
+      border-top-color: transparent;
+      border-bottom-color: var(--tooltip-border);
+    }
+
+    .layout {
+      display: flex;
+      flex-direction: column;
+      height: 100%;
+      min-height: 560px;
+    }
+
+    /* —— VS Code–style menu bar —— */
+    .menubar {
+      display: flex;
+      align-items: stretch;
+      height: var(--menubar-h);
+      background: #323233;
+      border-bottom: 1px solid #1e1e1e;
+      flex-shrink: 0;
+      user-select: none;
+      font-size: 13px;
+    }
+
+    .menubar__trigger {
+      padding: 0 12px;
+      display: flex;
+      align-items: center;
+      color: #cccccc;
+      background: transparent;
+      border: none;
+      font-family: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .menubar__trigger:hover,
+    .menubar__trigger[aria-expanded="true"] {
+      background: #2a2d2e;
+      color: #fff;
+    }
+
+    .menubar__slot {
+      position: relative;
+    }
+
+    .menubar__dropdown {
+      position: absolute;
+      top: 100%;
+      left: 0;
+      min-width: 220px;
+      padding: 4px 0;
+      background: #252526;
+      border: 1px solid #454545;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+      z-index: 4000;
+      display: none;
+    }
+
+    .menubar__dropdown.is-open { display: block; }
+
+    .menubar__item {
+      display: block;
+      width: 100%;
+      padding: 6px 20px;
+      text-align: left;
+      border: none;
+      background: transparent;
+      color: #cccccc;
+      font-family: inherit;
+      font-size: 13px;
+      cursor: pointer;
+    }
+
+    .menubar__item:hover {
+      background: #094771;
+      color: #fff;
+    }
+
+    .menubar__item--muted {
+      color: #858585;
+      font-size: 11px;
+      pointer-events: none;
+      padding: 8px 20px 4px;
+    }
+
+    .menubar__sep {
+      height: 1px;
+      margin: 4px 0;
+      background: #454545;
+    }
+
+    /* —— Toolbar (length + actions) —— */
+    .topbar {
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      padding: 0 12px;
+      height: var(--titlebar-h);
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .topbar__brand {
+      font-weight: 600;
+      font-size: 13px;
+    }
+
+    .topbar__brand span { color: var(--text-muted); font-weight: 400; }
+
+    .topbar__spacer { flex: 1; }
+
+    .length-meter {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 4px 12px;
+      background: var(--bg-elevated);
+      border-radius: var(--radius);
+      border: 1px solid var(--border);
+    }
+
+    .length-meter__bar {
+      width: 120px;
+      height: 6px;
+      background: var(--bg-app);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+
+    .length-meter__fill {
+      height: 100%;
+      width: 42%;
+      background: linear-gradient(90deg, var(--success), var(--warning));
+      border-radius: 3px;
+    }
+
+    .length-meter__text {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .length-meter__text strong { color: var(--text); }
+
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 12px;
+      font-size: 12px;
+      font-family: inherit;
+      color: var(--text);
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      cursor: pointer;
+      transition: background 0.12s, border-color 0.12s;
+    }
+
+    .btn:hover {
+      background: var(--bg-hover);
+      border-color: var(--accent);
+    }
+
+    .btn--primary {
+      background: var(--accent-dim);
+      border-color: var(--accent);
+      color: #93c5fd;
+    }
+
+    .btn--danger {
+      border-color: rgba(239, 68, 68, 0.5);
+      color: #fca5a5;
+    }
+
+    .btn--sm { padding: 4px 10px; font-size: 11px; }
+
+    .main {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+    }
+
+    .sidebar {
+      width: var(--sidebar-w);
+      flex-shrink: 0;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-panel);
+      border-right: 1px solid var(--border);
+    }
+
+    .sidebar__body {
+      flex: 1;
+      overflow: auto;
+      padding: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .sidebar__title {
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      color: var(--text-muted);
+      margin: 0 0 4px 0;
+    }
+
+    .panel {
+      background: var(--bg-elevated);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .panel__head {
+      padding: 8px 10px;
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .panel__body { padding: 10px; }
+
+    .search-row { display: flex; gap: 8px; }
+
+    .input, .textarea, select.set-input {
+      width: 100%;
+      padding: 8px 10px;
+      font-size: 12px;
+      font-family: inherit;
+      color: var(--text);
+      background: var(--bg-app);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      outline: none;
+    }
+
+    .textarea {
+      font-family: var(--mono);
+      font-size: 11px;
+      min-height: 120px;
+      resize: vertical;
+    }
+
+    .input:focus, .textarea:focus, select.set-input:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 2px var(--accent-dim);
+    }
+
+    .input::placeholder { color: var(--text-muted); }
+
+    .list {
+      list-style: none;
+      margin: 8px 0 0;
+      padding: 0;
+      max-height: min(360px, 45vh);
+      overflow: auto;
+    }
+
+    .list__item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      padding: 8px 10px;
+      font-size: 12px;
+      border-bottom: 1px solid var(--border);
+      cursor: pointer;
+      transition: background 0.1s;
+    }
+
+    .list__item:last-child { border-bottom: none; }
+
+    .list__item:hover { background: var(--accent-dim); }
+
+    .list__item code {
+      font-family: var(--mono);
+      font-size: 11px;
+      color: #93c5fd;
+    }
+
+    .badge {
+      font-size: 10px;
+      padding: 2px 6px;
+      border-radius: 4px;
+      background: var(--bg-app);
+      color: var(--text-muted);
+    }
+
+    .hint-line {
+      font-size: 11px;
+      color: var(--text-muted);
+      line-height: 1.5;
+      margin: 8px 0 0;
+    }
+
+    .editor-wrap {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+      background: var(--bg-app);
+    }
+
+    .editor-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      background: var(--bg-panel);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .editor-toolbar__label {
+      font-size: 11px;
+      color: var(--text-muted);
+    }
+
+    .editor-frame {
+      flex: 1;
+      margin: 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      display: flex;
+      min-height: 0;
+      background: #1e1e1e;
+    }
+
+    .editor-gutter {
+      width: 48px;
+      flex-shrink: 0;
+      padding: 12px 8px;
+      text-align: right;
+      font-family: var(--mono);
+      font-size: 12px;
+      line-height: 20px;
+      color: #6e7681;
+      background: #252526;
+      border-right: 1px solid #3c3c3c;
+      user-select: none;
+    }
+
+    .editor-content {
+      flex: 1;
+      padding: 12px 16px;
+      font-family: var(--mono);
+      font-size: 13px;
+      line-height: 20px;
+      color: #d4d4d4;
+      overflow: auto;
+      white-space: pre;
+    }
+
+    .sql-kw { color: #569cd6; }
+    .sql-str { color: #ce9178; }
+    .sql-cmt { color: #6a9955; }
+
+    .footer-note {
+      padding: 8px 16px;
+      font-size: 11px;
+      color: var(--text-muted);
+      border-top: 1px solid var(--border);
+      background: var(--bg-panel);
+      flex-shrink: 0;
+    }
+
+    /* —— Modal —— */
+    .modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.55);
+      z-index: 6000;
+      display: none;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .modal-backdrop.is-open { display: flex; }
+
+    .modal {
+      width: min(920px, 96vw);
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      background: var(--bg-panel);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+      overflow: hidden;
+    }
+
+    .modal__head {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    .modal__title {
+      font-size: 14px;
+      font-weight: 600;
+      margin: 0;
+      flex: 1;
+    }
+
+    .modal__body {
+      flex: 1;
+      overflow: auto;
+      padding: 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .settings-section {
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--bg-elevated);
+    }
+
+    .settings-section__head {
+      padding: 10px 14px;
+      font-size: 12px;
+      font-weight: 600;
+      background: var(--bg-app);
+      border-bottom: 1px solid var(--border);
+    }
+
+    .settings-section__body { padding: 14px; }
+
+    .ordered-list-meta {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin: 0 0 12px;
+      line-height: 1.5;
+    }
+
+    .path-group-list {
+      margin: 0;
+      padding-left: 22px;
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+
+    .path-group-list > li {
+      padding: 12px;
+      background: var(--bg-app);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      list-style-position: outside;
+    }
+
+    .path-group-list .row2 {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 10px;
+      margin-top: 8px;
+    }
+
+    @media (max-width: 700px) {
+      .path-group-list .row2 { grid-template-columns: 1fr; }
+    }
+
+    .field-label {
+      display: block;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      margin-bottom: 4px;
+    }
+
+    .path-group__actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 10px;
+      flex-wrap: wrap;
+    }
+
+    .rel-card {
+      padding: 12px;
+      background: var(--bg-app);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin-bottom: 10px;
+      font-size: 12px;
+    }
+
+    .rel-card:last-child { margin-bottom: 0; }
+
+    .rel-card__row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      flex-wrap: wrap;
+      margin-bottom: 6px;
+    }
+
+    .rel-type {
+      font-size: 10px;
+      padding: 2px 8px;
+      border-radius: 4px;
+      background: var(--accent-dim);
+      color: #93c5fd;
+    }
+
+    .rel-actions { display: flex; gap: 6px; margin-top: 8px; }
+
+    .json-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .visually-hidden {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      border: 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <nav class="menubar" aria-label="主菜单">
+      <div class="menubar__slot">
+        <button type="button" class="menubar__trigger" data-menu="file" aria-expanded="false" aria-haspopup="true" id="menu-file-btn">
+          File
+        </button>
+        <div class="menubar__dropdown" id="menu-file" role="menu">
+          <span class="menubar__item--muted">配置与工程</span>
+          <button type="button" class="menubar__item" data-action="import-json" role="menuitem">导入配置 JSON…</button>
+          <button type="button" class="menubar__item" data-action="export-json" role="menuitem">导出配置 JSON…</button>
+          <div class="menubar__sep"></div>
+          <span class="menubar__item--muted">占位</span>
+          <button type="button" class="menubar__item" role="menuitem" disabled>新建 SQL 标签（实现阶段）</button>
+        </div>
+      </div>
+      <div class="menubar__slot">
+        <button type="button" class="menubar__trigger" data-menu="settings-menu" aria-expanded="false" aria-haspopup="true" id="menu-settings-btn">
+          Settings
+        </button>
+        <div class="menubar__dropdown" id="menu-settings" role="menu">
+          <button type="button" class="menubar__item" data-action="open-settings" role="menuitem">打开设置…</button>
+          <button type="button" class="menubar__item" data-action="focus-json" role="menuitem">跳转到 JSON 预览</button>
+        </div>
+      </div>
+    </nav>
+
+    <header class="topbar">
+      <div class="topbar__brand" data-tip="DDS / Copybook 路径组、表关系、行长等均从设置中的 JSON 读取。">
+        SQL Web Tool <span>· DB2 / AS400 (Mocha)</span>
+      </div>
+      <div class="topbar__spacer"></div>
+      <div
+        class="length-meter"
+        data-tip="总 SQL 字符数上限（如 32767）。行长与自动换行、压缩在「设置 → SQL 行长与压缩」中配置。"
+      >
+        <span class="length-meter__text">SQL 长度 <strong>1,842</strong> / 32,767</span>
+        <div class="length-meter__bar" aria-hidden="true"><div class="length-meter__fill"></div></div>
+      </div>
+      <button type="button" class="btn btn--primary" data-tip="执行当前 SQL（设计稿占位）">执行</button>
+    </header>
+
+    <div class="main">
+      <aside class="sidebar">
+        <div class="sidebar__body">
+          <p class="sidebar__title">搜索</p>
+          <div class="panel">
+            <div class="panel__head">表名 / 字段名</div>
+            <div class="panel__body">
+              <div class="search-row">
+                <input
+                  class="input"
+                  type="search"
+                  placeholder="搜索表或字段…"
+                  data-tip="命中结果合并展示；点击表按配置关系插入 JOIN，点击字段插入 SELECT。元数据来自设置里 DDS/CBL 路径解析后的索引（实现阶段）。"
+                />
+              </div>
+              <ul class="list">
+                <li class="list__item" data-tip="表：按已写入配置 JSON 的 relations 自动展开 JOIN。">
+                  <span><code>LIB.ORDHDR</code></span>
+                  <span class="badge">表</span>
+                </li>
+                <li class="list__item" data-tip="表">
+                  <span><code>LIB.ORDDTL</code></span>
+                  <span class="badge">表</span>
+                </li>
+                <li class="list__item" data-tip="字段：插入当前 SELECT。">
+                  <span><code>ORDNUM</code> <span style="color:var(--text-muted)">· ORDHDR</span></span>
+                  <span class="badge">字段</span>
+                </li>
+                <li class="list__item" data-tip="字段">
+                  <span><code>CUSTID</code> <span style="color:var(--text-muted)">· ORDHDR</span></span>
+                  <span class="badge">字段</span>
+                </li>
+              </ul>
+              <p class="hint-line">
+                DDS 与 Copybook 目录、表关系、行长等在 <strong>Settings → 打开设置</strong> 中维护；应用运行时只读合并后的配置 JSON。
+              </p>
+            </div>
+          </div>
+        </div>
+      </aside>
+
+      <section class="editor-wrap">
+        <div class="editor-toolbar">
+          <span class="editor-toolbar__label">主编辑器（Monaco 占位）</span>
+          <span class="editor-toolbar__label" data-tip="格式化：按 maxCharsPerLine 换行；可选压缩空白以适配 Mocha 终端宽度。">
+            行长 / 压缩由设置决定
+          </span>
+        </div>
+        <div class="editor-frame" data-tip="与左侧搜索联动；查找表/字段时读配置 JSON 中的 ddsCopybookPathGroups 与 relations。">
+          <div class="editor-gutter">1<br />2<br />3<br />4<br />5<br />6<br />7<br />8</div>
+          <div class="editor-content"><span class="sql-cmt">-- 示例 SQL</span>
+<span class="sql-kw">SELECT</span> h.ORDNUM, h.CUSTID, d.LINENUM <span class="sql-kw">FROM</span> LIB.ORDHDR h
+<span class="sql-kw">LEFT JOIN</span> LIB.ORDDTL d <span class="sql-kw">ON</span> h.ORDNUM = d.ORDNUM
+<span class="sql-kw">WHERE</span> h.ORDSTS = <span class="sql-str">'OPEN'</span>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <footer class="footer-note">
+      配置持久化为 JSON；支持导入导出。可将「表关系配置目录」扫描结果合并进同一份 JSON，供搜索与插入 SQL 使用。
+    </footer>
+  </div>
+
+  <!-- Settings modal -->
+  <div class="modal-backdrop" id="settings-backdrop" aria-hidden="true">
+    <div class="modal" role="dialog" aria-labelledby="settings-title" aria-modal="true">
+      <div class="modal__head">
+        <h2 class="modal__title" id="settings-title">设置</h2>
+        <button type="button" class="btn btn--sm" id="settings-close" data-tip="关闭">关闭</button>
+      </div>
+      <div class="modal__body">
+        <section class="settings-section" id="section-paths">
+          <div class="settings-section__head">1. DDS / Copybook 路径组（有序）</div>
+          <div class="settings-section__body">
+            <p class="ordered-list-meta">
+              每一组包含 <strong>DDS 目录</strong> 与 <strong>Copybook 目录</strong>。同组内按文件名自动配对：
+              <code style="color:#93c5fd">表名.dds</code> 与 <code style="color:#93c5fd">表名.cbl</code>（basename 一致即视为同一表）。
+              多组之间为<strong>有序列表</strong>：若不同组出现相同表名，以<strong>排序靠前</strong>的组为准。
+            </p>
+            <ol class="path-group-list" id="path-groups-ol">
+              <li data-index="0">
+                <div><span class="field-label">排序 #1</span></div>
+                <div class="row2">
+                  <div>
+                    <label class="field-label" for="pg0-dds">DDS 路径</label>
+                    <input class="input" id="pg0-dds" type="text" placeholder="例如 D:\meta\dds\projA" value="D:\example\dds\projectA" />
+                  </div>
+                  <div>
+                    <label class="field-label" for="pg0-cpy">Copybook 路径</label>
+                    <input class="input" id="pg0-cpy" type="text" placeholder="例如 D:\meta\cpy\projA" value="D:\example\cpy\projectA" />
+                  </div>
+                </div>
+                <div class="path-group__actions">
+                  <button type="button" class="btn btn--sm" data-move="up" data-tip="上移该组（更优先）">上移</button>
+                  <button type="button" class="btn btn--sm" data-move="down" data-tip="下移该组">下移</button>
+                  <button type="button" class="btn btn--sm btn--danger" data-action="remove" data-tip="从列表移除该组">删除组</button>
+                </div>
+              </li>
+              <li data-index="1">
+                <div><span class="field-label">排序 #2</span></div>
+                <div class="row2">
+                  <div>
+                    <label class="field-label" for="pg1-dds">DDS 路径</label>
+                    <input class="input" id="pg1-dds" type="text" value="D:\legacy\dds" />
+                  </div>
+                  <div>
+                    <label class="field-label" for="pg1-cpy">Copybook 路径</label>
+                    <input class="input" id="pg1-cpy" type="text" value="D:\legacy\cpy" />
+                  </div>
+                </div>
+                <div class="path-group__actions">
+                  <button type="button" class="btn btn--sm" data-move="up">上移</button>
+                  <button type="button" class="btn btn--sm" data-move="down">下移</button>
+                  <button type="button" class="btn btn--sm btn--danger" data-action="remove">删除组</button>
+                </div>
+              </li>
+            </ol>
+            <button type="button" class="btn" style="margin-top:12px;" id="add-path-group" data-tip="在列表末尾新增一组路径（优先级最低，直至上移）">
+              ＋ 添加路径组
+            </button>
+          </div>
+        </section>
+
+        <section class="settings-section" id="section-relations">
+          <div class="settings-section__head">2. 表关系</div>
+          <div class="settings-section__body">
+            <p class="ordered-list-meta" style="margin-top:0">
+              维护一对多 / 多对多 / 多对一等关系及 ON 条件；保存进配置 JSON 的 <code style="color:#93c5fd">relations</code> 数组。
+            </p>
+            <div class="rel-card" data-tip="设计稿示意；实现阶段为表单编辑。">
+              <div class="rel-card__row">
+                <code>ORDHDR</code>
+                <span class="rel-type">one-to-many</span>
+                <code>ORDDTL</code>
+              </div>
+              <div class="rel-card__row" style="color: var(--text-muted); font-size: 11px;">
+                ON ORDHDR.ORDNUM = ORDDTL.ORDNUM
+              </div>
+              <div class="rel-actions">
+                <button type="button" class="btn btn--sm">编辑</button>
+                <button type="button" class="btn btn--sm">删除</button>
+              </div>
+            </div>
+            <div class="rel-card">
+              <div class="rel-card__row">
+                <code>CUSTMAS</code>
+                <span class="rel-type">many-to-one</span>
+                <code>ORDHDR</code>
+              </div>
+              <div class="rel-card__row" style="color: var(--text-muted); font-size: 11px;">
+                ON CUSTMAS.CUSTID = ORDHDR.CUSTID
+              </div>
+              <div class="rel-actions">
+                <button type="button" class="btn btn--sm">编辑</button>
+                <button type="button" class="btn btn--sm">删除</button>
+              </div>
+            </div>
+            <button type="button" class="btn">＋ 新建关系</button>
+
+            <div style="margin-top:16px; padding-top:14px; border-top:1px solid var(--border);">
+              <label class="field-label" for="relation-source-path">表关系外部配置路径（可选）</label>
+              <input class="input" id="relation-source-path" type="text" placeholder="目录或单个 JSON 文件路径，例如 D:\config\table-relations\" data-tip="实现阶段：从此路径读取关系定义，解析后合并进下方配置 JSON 的 relations / relationIndex，供查找使用。" />
+              <div class="json-actions" style="margin-top:10px;">
+                <button type="button" class="btn btn--sm" id="btn-merge-relations" data-tip="将外部路径解析结果与当前表单合并，写入下方 JSON 预览（本页为演示：写入示例桩数据）">
+                  扫描路径并合并到配置 JSON
+                </button>
+              </div>
+              <p class="hint-line">
+                需求：把表关系配置路径<strong>转为</strong>统一配置 JSON；后续搜索、插表、插字段只读该 JSON（及内存索引），避免直连多路径。
+              </p>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-section" id="section-sqlfmt">
+          <div class="settings-section__head">3. SQL 行长与压缩（Mocha / 5250）</div>
+          <div class="settings-section__body">
+            <div class="row2" style="display:grid; grid-template-columns: 1fr 1fr; gap:12px;">
+              <div>
+                <label class="field-label" for="max-chars">每行最大字符数</label>
+                <input class="input" id="max-chars" type="number" min="40" max="256" value="72" data-tip="超过则自动换行（在空格/逗号等断点优先断开，实现阶段细化）。" />
+              </div>
+              <div>
+                <label class="field-label" for="compress">压缩 SQL</label>
+                <select class="set-input" id="compress" data-tip="尽可能去掉多余空白与换行，在总行宽受限时便于粘贴到 Mocha。">
+                  <option value="true" selected>开启（minify 风格）</option>
+                  <option value="false">关闭（仅换行）</option>
+                </select>
+              </div>
+            </div>
+            <p class="hint-line">
+              与 Monaco 中「格式化」或「复制到剪贴板」动作联动：先按行长折行，再按需压缩。
+            </p>
+          </div>
+        </section>
+
+        <section class="settings-section" id="section-json">
+          <div class="settings-section__head">4. 配置 JSON（导入 / 导出）</div>
+          <div class="settings-section__body">
+            <div class="json-actions">
+              <button type="button" class="btn btn--sm" id="btn-export-json" data-tip="下载当前表单与演示数据合并后的 JSON 文件">导出 JSON</button>
+              <button type="button" class="btn btn--sm" id="btn-import-json" data-tip="从文件读取 JSON 并填充预览（完整回填表单可在实现阶段完成）">从文件导入…</button>
+              <input type="file" id="import-file" class="visually-hidden" accept=".json,application/json" />
+              <button type="button" class="btn btn--sm" id="btn-refresh-json" data-tip="根据当前输入重新生成下方预览">刷新预览</button>
+            </div>
+            <label class="field-label" for="config-json-text">appConfig.json 预览</label>
+            <textarea class="textarea" id="config-json-text" spellcheck="false" rows="14" aria-label="配置 JSON"></textarea>
+            <p class="hint-line">
+              字段建议：<code style="color:#93c5fd">version</code>、<code style="color:#93c5fd">ddsCopybookPathGroups[]</code>、<code style="color:#93c5fd">relations[]</code>、<code style="color:#93c5fd">sqlFormatting</code>、<code style="color:#93c5fd">tableRelationSourcePath</code>、<code style="color:#93c5fd">relationIndex</code>（由路径扫描生成的查找用索引）。
+            </p>
+          </div>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      var backdrop = document.getElementById("settings-backdrop");
+      var closeBtn = document.getElementById("settings-close");
+      var jsonText = document.getElementById("config-json-text");
+      var relationSourcePath = document.getElementById("relation-source-path");
+      var maxCharsEl = document.getElementById("max-chars");
+      var compressEl = document.getElementById("compress");
+      var pathGroupsOl = document.getElementById("path-groups-ol");
+
+      function openSettings() {
+        backdrop.classList.add("is-open");
+        backdrop.setAttribute("aria-hidden", "false");
+        refreshConfigPreview();
+        document.getElementById("settings-close").focus();
+      }
+
+      function closeSettings() {
+        backdrop.classList.remove("is-open");
+        backdrop.setAttribute("aria-hidden", "true");
+      }
+
+      function collectPathGroups() {
+        var items = pathGroupsOl.querySelectorAll("li[data-index]");
+        var groups = [];
+        for (var i = 0; i < items.length; i++) {
+          var inputs = items[i].querySelectorAll(".input");
+          var dds = inputs[0] ? inputs[0].value.trim() : "";
+          var cpy = inputs[1] ? inputs[1].value.trim() : "";
+          groups.push({
+            order: i,
+            ddsPath: dds,
+            copybookPath: cpy,
+            pairing: { ddsSuffix: ".dds", copybookSuffix: ".cbl" }
+          });
+        }
+        return groups;
+      }
+
+      function demoRelations() {
+        return [
+          {
+            id: "rel-1",
+            fromTable: "ORDHDR",
+            toTable: "ORDDTL",
+            cardinality: "one-to-many",
+            onClause: "ORDHDR.ORDNUM = ORDDTL.ORDNUM"
+          },
+          {
+            id: "rel-2",
+            fromTable: "CUSTMAS",
+            toTable: "ORDHDR",
+            cardinality: "many-to-one",
+            onClause: "CUSTMAS.CUSTID = ORDHDR.CUSTID"
+          }
+        ];
+      }
+
+      function buildConfig(extra) {
+        extra = extra || {};
+        return {
+          version: 1,
+          ddsCopybookPathGroups: collectPathGroups(),
+          tableResolution: {
+            description: "多组路径时按 ddsCopybookPathGroups 数组顺序解析；同名表以靠前条目为准。"
+          },
+          relations: extra.relations != null ? extra.relations : demoRelations(),
+          sqlFormatting: {
+            maxCharsPerLine: Number(maxCharsEl.value) || 72,
+            wrapLongLines: true,
+            compressSql: compressEl.value === "true"
+          },
+          tableRelationSourcePath: relationSourcePath.value.trim() || null,
+          relationIndex: extra.relationIndex != null ? extra.relationIndex : {}
+        };
+      }
+
+      function refreshConfigPreview() {
+        var cfg = buildConfig();
+        jsonText.value = JSON.stringify(cfg, null, 2);
+      }
+
+      function mergeRelationsStub() {
+        var p = relationSourcePath.value.trim() || "D:\\config\\table-relations\\";
+        relationSourcePath.value = p;
+        var stubIndex = {
+          byTable: {
+            ORDHDR: { source: p, files: ["ORDHDR.json"] },
+            ORDDTL: { source: p, files: ["ORDDTL.json"] }
+          },
+          mergedAt: new Date().toISOString(),
+          note: "演示：实现阶段由扫描 tableRelationSourcePath 生成，供 O(1) 查找"
+        };
+        var cfg = buildConfig({
+          relationIndex: stubIndex,
+          relations: demoRelations()
+        });
+        jsonText.value = JSON.stringify(cfg, null, 2);
+      }
+
+      function exportJsonFile() {
+        refreshConfigPreview();
+        var blob = new Blob([jsonText.value], { type: "application/json;charset=utf-8" });
+        var a = document.createElement("a");
+        a.href = URL.createObjectURL(blob);
+        a.download = "sql-web-tool-config.json";
+        a.click();
+        URL.revokeObjectURL(a.href);
+      }
+
+      function importJsonFile(e) {
+        var f = e.target.files && e.target.files[0];
+        if (!f) return;
+        var reader = new FileReader();
+        reader.onload = function () {
+          try {
+            var obj = JSON.parse(reader.result);
+            jsonText.value = JSON.stringify(obj, null, 2);
+          } catch (err) {
+            alert("JSON 解析失败：" + err.message);
+          }
+        };
+        reader.readAsText(f, "UTF-8");
+        e.target.value = "";
+      }
+
+      /* Menubar dropdowns */
+      var openMenuId = null;
+      function closeAllMenus() {
+        document.querySelectorAll(".menubar__dropdown").forEach(function (d) {
+          d.classList.remove("is-open");
+        });
+        document.querySelectorAll(".menubar__trigger").forEach(function (t) {
+          t.setAttribute("aria-expanded", "false");
+        });
+        openMenuId = null;
+      }
+
+      document.querySelectorAll(".menubar__trigger").forEach(function (trigger) {
+        trigger.addEventListener("click", function (ev) {
+          ev.stopPropagation();
+          var id = trigger.getAttribute("data-menu");
+          var drop = trigger.parentElement.querySelector(".menubar__dropdown");
+          var isOpen = drop.classList.contains("is-open");
+          closeAllMenus();
+          if (!isOpen) {
+            drop.classList.add("is-open");
+            trigger.setAttribute("aria-expanded", "true");
+            openMenuId = id;
+          }
+        });
+      });
+
+      document.addEventListener("click", function () {
+        closeAllMenus();
+      });
+
+      document.querySelectorAll(".menubar__dropdown").forEach(function (d) {
+        d.addEventListener("click", function (e) {
+          e.stopPropagation();
+        });
+      });
+
+      document.querySelectorAll('[data-action="open-settings"]').forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          closeAllMenus();
+          openSettings();
+        });
+      });
+
+      document.querySelectorAll('[data-action="focus-json"]').forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          closeAllMenus();
+          openSettings();
+          document.getElementById("section-json").scrollIntoView({ behavior: "smooth", block: "start" });
+          jsonText.focus();
+        });
+      });
+
+      document.querySelectorAll('[data-action="import-json"]').forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          closeAllMenus();
+          openSettings();
+          document.getElementById("import-file").click();
+        });
+      });
+
+      document.querySelectorAll('[data-action="export-json"]').forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          closeAllMenus();
+          openSettings();
+          exportJsonFile();
+        });
+      });
+
+      closeBtn.addEventListener("click", closeSettings);
+      backdrop.addEventListener("click", function (e) {
+        if (e.target === backdrop) closeSettings();
+      });
+
+      document.addEventListener("keydown", function (e) {
+        if (e.key === "Escape" && backdrop.classList.contains("is-open")) {
+          closeSettings();
+          closeAllMenus();
+        }
+      });
+
+      document.getElementById("btn-export-json").addEventListener("click", exportJsonFile);
+      document.getElementById("btn-import-json").addEventListener("click", function () {
+        document.getElementById("import-file").click();
+      });
+      document.getElementById("import-file").addEventListener("change", importJsonFile);
+      document.getElementById("btn-refresh-json").addEventListener("click", refreshConfigPreview);
+      document.getElementById("btn-merge-relations").addEventListener("click", mergeRelationsStub);
+
+      maxCharsEl.addEventListener("change", refreshConfigPreview);
+      compressEl.addEventListener("change", refreshConfigPreview);
+      relationSourcePath.addEventListener("change", refreshConfigPreview);
+      pathGroupsOl.addEventListener("input", function (e) {
+        if (e.target && e.target.classList.contains("input")) refreshConfigPreview();
+      });
+
+      function renumberPathGroups() {
+        var lis = pathGroupsOl.querySelectorAll("li");
+        lis.forEach(function (li, idx) {
+          li.setAttribute("data-index", String(idx));
+          var lbl = li.querySelector(".field-label");
+          if (lbl && lbl.textContent.indexOf("排序") === 0) {
+            lbl.textContent = "排序 #" + (idx + 1);
+          }
+        });
+        refreshConfigPreview();
+      }
+
+      document.getElementById("add-path-group").addEventListener("click", function () {
+        var li = document.createElement("li");
+        var n = pathGroupsOl.querySelectorAll("li").length;
+        li.setAttribute("data-index", String(n));
+        li.innerHTML =
+          '<div><span class="field-label">排序 #' + (n + 1) + '</span></div>' +
+          '<div class="row2">' +
+          '<div><label class="field-label">DDS 路径</label><input class="input" type="text" placeholder="DDS 目录" /></div>' +
+          '<div><label class="field-label">Copybook 路径</label><input class="input" type="text" placeholder="Copybook 目录" /></div>' +
+          '</div>' +
+          '<div class="path-group__actions">' +
+          '<button type="button" class="btn btn--sm" data-move="up">上移</button>' +
+          '<button type="button" class="btn btn--sm" data-move="down">下移</button>' +
+          '<button type="button" class="btn btn--sm btn--danger" data-action="remove">删除组</button>' +
+          '</div>';
+        pathGroupsOl.appendChild(li);
+        renumberPathGroups();
+      });
+
+      pathGroupsOl.addEventListener("click", function (e) {
+        var t = e.target;
+        if (!(t instanceof HTMLElement)) return;
+        var move = t.getAttribute("data-move");
+        var li = t.closest("li");
+        if (!li) return;
+        if (move === "up" && li.previousElementSibling) {
+          pathGroupsOl.insertBefore(li, li.previousElementSibling);
+          renumberPathGroups();
+        } else if (move === "down" && li.nextElementSibling) {
+          pathGroupsOl.insertBefore(li.nextElementSibling, li);
+          renumberPathGroups();
+        } else if (t.getAttribute("data-action") === "remove") {
+          if (pathGroupsOl.querySelectorAll("li").length <= 1) {
+            alert("至少保留一组路径。");
+            return;
+          }
+          li.remove();
+          renumberPathGroups();
+        }
+      });
+
+      refreshConfigPreview();
+    })();
+  </script>
+</body>
+</html>
