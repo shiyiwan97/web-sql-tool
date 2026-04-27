@@ -9,7 +9,7 @@ type Props = {
   onApply: (next: HotkeyConfig) => void;
 };
 
-type CaptureKind = "copy" | "save" | null;
+type CaptureKind = "copy" | "save" | "compressLine" | "compressBlock" | null;
 
 export function HotkeysSettingsModal({
   open,
@@ -65,6 +65,26 @@ export function HotkeysSettingsModal({
             </button>
           </div>
 
+          <div style={row}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={lbl}>压缩当前行/区域（向上填充）</div>
+              <code style={code}>{hotkeys.compressLineOrSelection || "（未绑定）"}</code>
+            </div>
+            <button type="button" style={btn} onClick={() => setCapture("compressLine")}>
+              更改…
+            </button>
+          </div>
+
+          <div style={row}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={lbl}>压缩当前分号块（整块向上填充）</div>
+              <code style={code}>{hotkeys.compressCurrentBlock || "（未绑定）"}</code>
+            </div>
+            <button type="button" style={btn} onClick={() => setCapture("compressBlock")}>
+              更改…
+            </button>
+          </div>
+
           <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
             <button type="button" style={btn} onClick={onClose}>
               关闭
@@ -99,6 +119,36 @@ export function HotkeysSettingsModal({
           onClose={() => setCapture(null)}
           onConfirm={(s) => {
             onApply({ ...hotkeys, saveEditorSql: s });
+            setCapture(null);
+          }}
+        />
+      ) : null}
+      {capture === "compressLine" ? (
+        <ShortcutCaptureModal
+          open
+          zIndex={13000}
+          title="绑定：压缩当前行/区域"
+          description="光标所在行（或选区覆盖的行）会尝试从下一行搬词向上填充，直到接近每行最大字符。"
+          initialShortcut={hotkeys.compressLineOrSelection}
+          confirmLabel="保存"
+          onClose={() => setCapture(null)}
+          onConfirm={(s) => {
+            onApply({ ...hotkeys, compressLineOrSelection: s });
+            setCapture(null);
+          }}
+        />
+      ) : null}
+      {capture === "compressBlock" ? (
+        <ShortcutCaptureModal
+          open
+          zIndex={13000}
+          title="绑定：压缩当前分号块"
+          description="对当前分号块执行同样的向上填充压缩（仅影响当前块）。"
+          initialShortcut={hotkeys.compressCurrentBlock}
+          confirmLabel="保存"
+          onClose={() => setCapture(null)}
+          onConfirm={(s) => {
+            onApply({ ...hotkeys, compressCurrentBlock: s });
             setCapture(null);
           }}
         />

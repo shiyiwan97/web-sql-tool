@@ -29,6 +29,7 @@ import {
   replaceBlockText,
 } from "./lib/sqlBlocks";
 import { stripSqlComments } from "./lib/sqlComments";
+import { compressLinesUpward } from "./lib/sqlLineCompress";
 import {
   loadSidebarUi,
   persistSidebarUi,
@@ -313,30 +314,36 @@ export default function App() {
       const pos = ed.getPosition();
       if (!model || !pos) return;
 
-      const lineNumber = pos.lineNumber;
+      // 以本次变更所在行为准（行内插入空格也可能导致超长）
+      const lineNumber = ch.range.startLineNumber ?? pos.lineNumber;
       const line = model.getLineContent(lineNumber);
       // Monaco column 从 1 开始；line.length 是字符数
       if (line.length <= maxLen) return;
 
-      // 如果光标还没超过 maxLen，先不动（避免行内编辑带来的奇怪换行）
-      if (pos.column <= maxLen) return;
+      // 只在“本次变更发生在边界前/边界处”或“光标已过边界”时触发自动断行
+      const changeCol = ch.range.startColumn ?? pos.column;
+      if (changeCol > maxLen + 1 && pos.column <= maxLen) return;
 
       const before = line.slice(0, maxLen);
       let cut = before.lastIndexOf(" ");
       if (cut < 1) cut = maxLen;
 
-      // 在 cut 位置插入换行（column = cut+1）
+      // 优先把断点空格替换为换行，避免行尾残留空格；若无空格则直接插入换行
+      const replaceSpace = cut < maxLen && line[cut] === " ";
       const insertPos = new monaco.Position(lineNumber, cut + 1);
+      const range = replaceSpace
+        ? new monaco.Range(lineNumber, cut + 1, lineNumber, cut + 2)
+        : new monaco.Range(
+            insertPos.lineNumber,
+            insertPos.column,
+            insertPos.lineNumber,
+            insertPos.column,
+          );
       autoHardWrapRef.current = true;
       try {
         ed.executeEdits("auto-hard-wrap", [
           {
-            range: new monaco.Range(
-              insertPos.lineNumber,
-              insertPos.column,
-              insertPos.lineNumber,
-              insertPos.column,
-            ),
+            range,
             text: "\n",
             forceMoveMarkers: true,
           },
@@ -455,6 +462,91 @@ export default function App() {
         }),
       );
     }
+
+    const compressLineKb = shortcutStringToKeyCode(
+      monaco,
+      config.hotkeys.compressLineOrSelection,
+    );
+    if (compressLineKb != null) {
+      disposables.push(
+        editor.addAction({
+          id: "sql-tool-compress-line-or-selection",
+          label: "压缩当前行/区域（向上填充）",
+          keybindings: [compressLineKb],
+          run: (ed) => {
+            const model = ed.getModel();
+            const pos = ed.getPosition();
+            const sel = ed.getSelection();
+            if (!model || !pos) return;
+            const full = model.getValue();
+            const maxLen = Math.max(
+              8,
+              Math.floor(configRef.current.sqlFormatting.maxCharsPerLine) || 72,
+            );
+            const lineCount = model.getLineCount();
+
+            let startLine = pos.lineNumber;
+            let endLine = pos.lineNumber;
+            if (sel && !sel.isEmpty()) {
+              startLine = sel.startLineNumber;
+              endLine = sel.endLineNumber;
+              // 选区如果落在行首，通常意味着没覆盖最后一行
+              if (sel.endColumn === 1 && endLine > startLine) endLine -= 1;
+            }
+            // 为了“向上填充”，包含一个 donor 行（下一行）
+            const donorEnd = Math.min(lineCount, endLine + 1);
+            const beforeOff = model.getOffsetAt(pos);
+            const next = compressLinesUpward(
+              full,
+              maxLen,
+              startLine - 1,
+              donorEnd - 1,
+            );
+            pendingEditorCursorOffsetRef.current = Math.min(beforeOff, next.length);
+            setSql(next);
+          },
+        }),
+      );
+    }
+
+    const compressBlockKb = shortcutStringToKeyCode(
+      monaco,
+      config.hotkeys.compressCurrentBlock,
+    );
+    if (compressBlockKb != null) {
+      disposables.push(
+        editor.addAction({
+          id: "sql-tool-compress-current-block",
+          label: "压缩当前分号块（向上填充）",
+          keybindings: [compressBlockKb],
+          run: (ed) => {
+            const model = ed.getModel();
+            const pos = ed.getPosition();
+            if (!model || !pos) return;
+            const full = model.getValue();
+            const off = model.getOffsetAt(pos);
+            const idx = blockIndexAtOffset(full, off);
+            const blocks = getSqlBlocks(full);
+            const b = blocks[idx];
+            if (!b) return;
+            const maxLen = Math.max(
+              8,
+              Math.floor(configRef.current.sqlFormatting.maxCharsPerLine) || 72,
+            );
+            const inner = full.slice(b.start, b.end);
+            const compressed = compressLinesUpward(
+              inner,
+              maxLen,
+              0,
+              inner.replace(/\r\n/g, "\n").split("\n").length - 1,
+            ).trim();
+            const next = replaceBlockText(full, idx, compressed);
+            pendingEditorCursorOffsetRef.current = Math.min(off, next.length);
+            setSql(next);
+          },
+        }),
+      );
+    }
     for (const qi of config.quickInserts) {
       const code = shortcutStringToKeyCode(monaco, qi.shortcut);
       if (code == null) continue;
@@ -481,6 +573,8 @@ export default function App() {
     monacoReadyTick,
     config.hotkeys.copyCurrentBlock,
     config.hotkeys.saveEditorSql,
+    config.hotkeys.compressLineOrSelection,
+    config.hotkeys.compressCurrentBlock,
     config.quickInserts,
   ]);
 

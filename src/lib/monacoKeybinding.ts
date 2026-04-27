@@ -60,5 +60,21 @@ export function shortcutStringToKeyCode(
     if (typeof code === "number") return mod | code;
   }
 
+  const specials: Record<string, number> = {
+    backspace: monaco.KeyCode.Backspace,
+    del: monaco.KeyCode.Delete,
+    delete: monaco.KeyCode.Delete,
+    enter: monaco.KeyCode.Enter,
+    tab: monaco.KeyCode.Tab,
+    esc: monaco.KeyCode.Escape,
+    escape: monaco.KeyCode.Escape,
+    space: monaco.KeyCode.Space,
+    up: monaco.KeyCode.UpArrow,
+    down: monaco.KeyCode.DownArrow,
+    left: monaco.KeyCode.LeftArrow,
+    right: monaco.KeyCode.RightArrow,
+  };
+  if (specials[key] != null) return mod | specials[key];
+
   return null;
 }

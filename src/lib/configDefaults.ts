@@ -85,6 +85,8 @@ export function createDefaultConfig(): AppConfig {
     hotkeys: {
       copyCurrentBlock: "Ctrl+Shift+C",
       saveEditorSql: "Ctrl+Alt+S",
+      compressLineOrSelection: "Shift+Backspace",
+      compressCurrentBlock: "Ctrl+Shift+Backspace",
     },
   };
 }
@@ -298,6 +300,12 @@ function normalizeHotkeys(raw: unknown, fallback: HotkeyConfig): HotkeyConfig {
   return {
     copyCurrentBlock: String(h.copyCurrentBlock ?? fallback.copyCurrentBlock),
     saveEditorSql: String(h.saveEditorSql ?? fallback.saveEditorSql),
+    compressLineOrSelection: String(
+      h.compressLineOrSelection ?? fallback.compressLineOrSelection,
+    ),
+    compressCurrentBlock: String(
+      h.compressCurrentBlock ?? fallback.compressCurrentBlock,
+    ),
   };
 }
 

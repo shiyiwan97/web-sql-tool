@@ -84,6 +84,10 @@ export interface HotkeyConfig {
   copyCurrentBlock: string;
   /** 将当前分号块或选区（去注释）新建为「已存 SQL」一条存档，如 Ctrl+Alt+S */
   saveEditorSql: string;
+  /** 压缩当前行/区域（向上填充行），如 Shift+Backspace */
+  compressLineOrSelection: string;
+  /** 压缩当前分号块，如 Ctrl+Shift+Backspace */
+  compressCurrentBlock: string;
 }
 
 export interface AppConfig {
