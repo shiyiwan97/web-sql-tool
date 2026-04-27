@@ -29,13 +29,22 @@ export interface TableRelation {
 /** 0 不压缩；1 轻微（去行首缩进等）；2 强力（单行贪心装填到行长） */
 export type SqlCompressLevel = 0 | 1 | 2;
 
+/** soft = 仅视觉折行，行号不变；hard = 关闭视觉折行，真实换行使行号 +1（用「重排」或复制格式化） */
+export type EditorLineBreak = "soft" | "hard";
+
 export interface SqlFormatting {
   maxCharsPerLine: number;
   /** 在 Monaco 中于「每行最大字符」列绘制竖线（rulers） */
   showColumnGuide: boolean;
-  /** 仅影响编辑器内视觉换行参考列 */
-  wrapLongLines: boolean;
+  editorLineBreak: EditorLineBreak;
   compressLevel: SqlCompressLevel;
+}
+
+/** 本地保存的 SQL 片段（设置中编辑，可导入导出随配置 JSON） */
+export interface SqlSnippet {
+  id: string;
+  name: string;
+  text: string;
 }
 
 export interface TableCatalogEntry {
@@ -53,7 +62,7 @@ export interface RelationIndex {
 }
 
 /** 可停靠侧栏面板 */
-export type PanelSlot = "search" | "quickInsert";
+export type PanelSlot = "search" | "savedSql" | "quickInsert";
 
 export interface SidebarLayout {
   /** 左侧自上而下 */
@@ -73,6 +82,8 @@ export interface QuickInsertEntry {
 export interface HotkeyConfig {
   /** 复制当前分号块（格式化、无分号），如 Ctrl+Shift+C */
   copyCurrentBlock: string;
+  /** 将当前分号块或选区（去注释）新建为「已存 SQL」一条存档，如 Ctrl+Alt+S */
+  saveEditorSql: string;
 }
 
 export interface AppConfig {
@@ -83,6 +94,8 @@ export interface AppConfig {
   tableResolution: { description: string };
   relations: TableRelation[];
   sqlFormatting: SqlFormatting;
+  /** 常用 SQL 片段，便于从 DDS/手工维护的语句入库 */
+  sqlSnippets: SqlSnippet[];
   tableRelationSourcePath: string | null;
   relationIndex: RelationIndex;
   /** Field search + insert: built from JSON / future DDS parse */

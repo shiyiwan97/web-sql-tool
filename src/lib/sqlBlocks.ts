@@ -56,6 +56,22 @@ export function getBlockTextForCopy(sql: string, index: number): string {
   return blocks[i].text;
 }
 
+/** 用新文本替换第 index 个分号块（保持块外与分号布局不变） */
+export function replaceBlockText(
+  sql: string,
+  blockIndex: number,
+  newInnerText: string,
+): string {
+  const blocks = getSqlBlocks(sql);
+  const inner = newInnerText.trim();
+  if (blocks.length === 0) {
+    return inner;
+  }
+  const i = Math.max(0, Math.min(blockIndex, blocks.length - 1));
+  const b = blocks[i];
+  return sql.slice(0, b.start) + inner + sql.slice(b.end);
+}
+
 export function countSqlBlocks(sql: string): number {
   return getSqlBlocks(sql).length;
 }

@@ -1,0 +1,11 @@
+     A* TEST EXAMSCORE — 考试成绩
+     A* Pair with ../cpy/EXAMSCORE.cbl
+     A          R EXAMSCORF
+     A            STUID       10A
+     A            EXAMDATE     8S 0
+     A            SUBJECT     16A
+     A            SCORE        5P 2
+     A            FULLSCR      5P 2
+     A          K STUID
+     A          K EXAMDATE
+     A          K SUBJECT

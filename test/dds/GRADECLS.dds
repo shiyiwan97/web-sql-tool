@@ -1,0 +1,8 @@
+     A* TEST GRADECLS — 年级班级（sample DDS for sql-web-tool）
+     A* Pair with ../cpy/GRADECLS.cbl
+     A          R GRADECLSF
+     A            GCLSID       8A
+     A            GRADEYR      4S 0
+     A            CLASSNM     20A
+     A            ROOMNO       6A
+     A          K GCLSID

@@ -132,3 +132,48 @@ textarea {
   background: var(--menubar-dd-hover-bg);
   color: var(--menubar-dd-hover-fg);
 }
+
+/*
+ * Monaco 查找条：提高层级，避免被编辑器内其它浮层挡住。
+ * 长 title 的多行原生 tooltip 易盖住按钮；title 仅对 .find-widget 子树剥离（见 App 内 observer）。
+ */
+.monaco-editor .find-widget {
+  z-index: 100 !important;
+}
+
+.monaco-editor .find-widget > .button.codicon-widget-close {
+  z-index: 2;
+}
+
+.monaco-editor .find-widget .find-actions .monaco-custom-toggle {
+  position: relative;
+  z-index: 1;
+}
+
+/*
+ * Monaco Find widget tooltip flicker workaround.
+ * 参考：
+ * - https://github.com/microsoft/monaco-editor/issues/5177
+ * - https://github.com/microsoft/monaco-editor/issues/5208
+ *
+ * 一些集成场景下，hover tooltip 会换成两行（label + keybinding 上下堆叠），高度盖住按钮触发
+ * mouseleave -> tooltip 销毁 -> mouseenter -> tooltip 重建 的循环，导致闪烁、按钮点不到。
+ *
+ * 这里在 find-widget 可见时（由 App 给 body 打上 .find-widget-open）把 tooltip 强制单行横排，
+ * 并禁用 pointer events，避免拦截鼠标。
+ */
+body.find-widget-open .workbench-hover-container,
+body.find-widget-open .monaco-hover {
+  pointer-events: none !important;
+}
+
+body.find-widget-open .workbench-hover-container * {
+  white-space: nowrap !important;
+}
+
+body.find-widget-open .workbench-hover-container .hover-row {
+  display: flex !important;
+  flex-direction: row !important;
+  gap: 8px !important;
+  align-items: center !important;
+}

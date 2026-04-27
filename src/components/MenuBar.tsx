@@ -5,7 +5,7 @@ type Props = {
   onFocusJsonInSettings: () => void;
   onImportConfig: () => void;
   onExportConfig: () => void;
-  onOpenCopyHotkeyModal: () => void;
+  onOpenHotkeys: () => void;
 };
 
 export function MenuBar({
@@ -13,20 +13,26 @@ export function MenuBar({
   onFocusJsonInSettings,
   onImportConfig,
   onExportConfig,
-  onOpenCopyHotkeyModal,
+  onOpenHotkeys,
 }: Props) {
   const [open, setOpen] = useState<"file" | "settings" | null>(null);
-  const [settingsSub, setSettingsSub] = useState<"hotkeys" | null>(null);
 
+  /** 捕获阶段关闭，避免子菜单/编辑器内点击顺序导致菜单关不掉或误关 */
   useEffect(() => {
-    const close = () => setOpen(null);
-    document.addEventListener("click", close);
-    return () => document.removeEventListener("click", close);
-  }, []);
+    if (open === null) return;
+    const close = (e: PointerEvent) => {
+      const el = e.target;
+      if (el instanceof Element && el.closest("[data-menubar-root]")) return;
+      setOpen(null);
+    };
+    window.addEventListener("pointerdown", close, true);
+    return () => window.removeEventListener("pointerdown", close, true);
+  }, [open]);
 
   return (
     <nav
       className="menubar"
+      data-menubar-root
       aria-label="主菜单"
       style={{
         display: "flex",
@@ -37,17 +43,13 @@ export function MenuBar({
         userSelect: "none",
         fontSize: 13,
       }}
-      onClick={(e) => e.stopPropagation()}
     >
       <div style={{ position: "relative" }}>
         <button
           type="button"
           className="menubar-trigger"
           aria-expanded={open === "file"}
-          onClick={(e) => {
-            e.stopPropagation();
-            setOpen(open === "file" ? null : "file");
-          }}
+          onClick={() => setOpen(open === "file" ? null : "file")}
           style={menubarTriggerStyle(open === "file")}
         >
           File
@@ -86,11 +88,7 @@ export function MenuBar({
           type="button"
           className="menubar-trigger"
           aria-expanded={open === "settings"}
-          onClick={(e) => {
-            e.stopPropagation();
-            setSettingsSub(null);
-            setOpen(open === "settings" ? null : "settings");
-          }}
+          onClick={() => setOpen(open === "settings" ? null : "settings")}
           style={menubarTriggerStyle(open === "settings")}
         >
           Settings
@@ -122,58 +120,18 @@ export function MenuBar({
             >
               跳转到 JSON 预览
             </button>
-            <div
-              style={{ position: "relative" }}
-              onClick={(e) => e.stopPropagation()}
+            <button
+              type="button"
+              className="menubar-dd-item"
+              style={itemStyle}
+              role="menuitem"
+              onClick={() => {
+                onOpenHotkeys();
+                setOpen(null);
+              }}
             >
-              <button
-                type="button"
-                className="menubar-dd-item"
-                style={{
-                  ...itemStyle,
-                  display: "flex",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                }}
-                role="menuitem"
-                aria-expanded={settingsSub === "hotkeys"}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  setSettingsSub((s) => (s === "hotkeys" ? null : "hotkeys"));
-                }}
-              >
-                <span>快捷键设置</span>
-                <span aria-hidden style={{ fontSize: 10, opacity: 0.7 }}>
-                  ▶
-                </span>
-              </button>
-              {settingsSub === "hotkeys" ? (
-                <div
-                  style={{
-                    ...dropdownStyle,
-                    left: "100%",
-                    top: 0,
-                    marginLeft: 2,
-                    minWidth: 180,
-                  }}
-                  role="menu"
-                >
-                  <button
-                    type="button"
-                    className="menubar-dd-item"
-                    style={itemStyle}
-                    role="menuitem"
-                    onClick={() => {
-                      onOpenCopyHotkeyModal();
-                      setOpen(null);
-                      setSettingsSub(null);
-                    }}
-                  >
-                    配置复制快捷键…
-                  </button>
-                </div>
-              ) : null}
-            </div>
+              快捷键…
+            </button>
           </div>
         )}
       </div>

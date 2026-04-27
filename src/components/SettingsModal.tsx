@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -10,10 +11,13 @@ import type {
   AppConfig,
   Cardinality,
   DdsCopybookPathGroup,
+  SqlSnippet,
+  SqlCompressLevel,
   TableRelation,
   UiTheme,
 } from "../types";
 import { normalizeConfig } from "../lib/configDefaults";
+import { applySqlFormatting } from "../lib/sqlEditorOps";
 
 type Props = {
   open: boolean;
@@ -23,7 +27,13 @@ type Props = {
   focusJsonTick?: number;
 };
 
-type SectionId = "basic" | "paths" | "relations" | "sqlfmt" | "json";
+type SectionId =
+  | "basic"
+  | "paths"
+  | "relations"
+  | "sqlfmt"
+  | "snippets"
+  | "json";
 
 const cardOpts: { v: Cardinality; label: string }[] = [
   { v: "one-to-many", label: "一对多 (1:N)" },
@@ -41,6 +51,17 @@ function newRel(): TableRelation {
     joinKind: "LEFT",
   };
 }
+
+function newSnippet(): SqlSnippet {
+  return {
+    id: `snip-${globalThis.crypto?.randomUUID?.() ?? String(Date.now())}`,
+    name: "",
+    text: "",
+  };
+}
+
+const FORMAT_PREVIEW_SAMPLE =
+  "SELECT  col1,  col2,  col3\nFROM  LIB.T1  t\nWHERE  t.ID = 'x'";
 
 function AccordionSection({
   title,
@@ -132,6 +153,7 @@ export function SettingsModal({
     paths: true,
     relations: true,
     sqlfmt: true,
+    snippets: false,
     json: false,
   });
 
@@ -140,6 +162,16 @@ export function SettingsModal({
 
   const toggle = (id: SectionId) =>
     setOpenSections((s) => ({ ...s, [id]: !s[id] }));
+
+  const compressPreviews = useMemo(() => {
+    const base = draft.sqlFormatting;
+    return ([0, 1, 2] as SqlCompressLevel[]).map((level) =>
+      applySqlFormatting(FORMAT_PREVIEW_SAMPLE, {
+        ...base,
+        compressLevel: level,
+      }),
+    );
+  }, [draft.sqlFormatting]);
 
   useEffect(() => {
     if (open) {
@@ -309,6 +341,7 @@ export function SettingsModal({
           >
             <p style={hint}>
               同组内按 <code>表名.dds</code> 与 <code>表名.cbl</code> 配对；多组时同名表以列表靠前为准。浏览器端仅保存路径字符串。
+              从 DDS / copybook 自动生成「表目录」尚在规划：可先用手工 JSON 或外部脚本生成后导入配置。
             </p>
             <ol
               style={{
@@ -508,6 +541,24 @@ export function SettingsModal({
                   </select>
                   <button
                     type="button"
+                    style={btnSm}
+                    onClick={() =>
+                      setDraft((d) => ({
+                        ...d,
+                        relations: [
+                          ...d.relations,
+                          {
+                            ...r,
+                            id: `rel-${globalThis.crypto?.randomUUID?.() ?? String(Date.now())}`,
+                          },
+                        ],
+                      }))
+                    }
+                  >
+                    复制
+                  </button>
+                  <button
+                    type="button"
                     style={{
                       ...btnSm,
                       marginLeft: "auto",
@@ -619,33 +670,155 @@ export function SettingsModal({
                 </select>
               </div>
               <div style={{ minWidth: 0 }}>
-                <label style={lbl2}>自动换行</label>
+                <label style={lbl2}>换行设置</label>
                 <select
                   style={inp}
-                  value={draft.sqlFormatting.wrapLongLines ? "y" : "n"}
-                  onChange={(e) =>
+                  value={draft.sqlFormatting.editorLineBreak}
+                  onChange={(e) => {
+                    const v = e.target.value === "hard" ? "hard" : "soft";
                     setDraft((d) => ({
                       ...d,
-                      sqlFormatting: {
-                        ...d.sqlFormatting,
-                        wrapLongLines: e.target.value === "y",
-                      },
-                    }))
-                  }
+                      sqlFormatting: { ...d.sqlFormatting, editorLineBreak: v },
+                    }));
+                  }}
                 >
-                  <option value="y">开启</option>
-                  <option value="n">关闭</option>
+                  <option value="soft">软换行</option>
+                  <option value="hard">硬换行</option>
+                </select>
+              </div>
+              <div style={{ minWidth: 0 }}>
+                <label style={lbl2}>压缩等级（与主界面同步）</label>
+                <select
+                  style={inp}
+                  value={String(draft.sqlFormatting.compressLevel)}
+                  onChange={(e) => {
+                    const v = Number(e.target.value);
+                    const level = (v === 2 ? 2 : v === 1 ? 1 : 0) as SqlCompressLevel;
+                    setDraft((d) => ({
+                      ...d,
+                      sqlFormatting: { ...d.sqlFormatting, compressLevel: level },
+                    }));
+                  }}
+                >
+                  <option value="0">0 不压缩</option>
+                  <option value="1">1 轻微</option>
+                  <option value="2">2 强力</option>
                 </select>
               </div>
             </div>
             <p style={{ ...hint, marginTop: 10 }}>
-              「每行最大字符」对<strong>复制</strong>与快捷键复制的 SQL 始终生效；<strong>压缩等级</strong>在主界面工具栏中选择。开启「行长竖线」时，编辑器会在该列位置绘制参考竖线（与自动换行列宽一致）。
-              AS400：若上一行恰好写满行长且下一行以新 token 顶格开始，会自动在下一行行首插入空格以防终端拼行。
+              「每行最大字符」对<strong>复制</strong>、快捷键复制、工具栏<strong>重排</strong>均生效。复制与快捷键保存到已存 SQL 时会去掉 <code>--</code> 与 <code>/* */</code> 注释。
+              开启「行长竖线」时，编辑器在该列绘制参考线。AS400
+              满行衔接时会在下一行行首补空格以防终端拼行。
             </p>
+            <div style={{ marginTop: 14 }}>
+              <label style={lbl2}>压缩等级预览（固定样例 SQL）</label>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                  gap: 10,
+                  marginTop: 8,
+                }}
+              >
+                {compressPreviews.map((text, i) => (
+                  <div key={i} style={{ minWidth: 0 }}>
+                    <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>
+                      等级 {i}
+                    </div>
+                    <pre
+                      style={{
+                        margin: 0,
+                        padding: 8,
+                        fontSize: 10,
+                        fontFamily: "var(--mono)",
+                        background: "var(--bg-app)",
+                        border: "1px solid var(--border)",
+                        borderRadius: 6,
+                        whiteSpace: "pre-wrap",
+                        wordBreak: "break-word",
+                        maxHeight: 160,
+                        overflow: "auto",
+                      }}
+                    >
+                      {text}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            </div>
           </AccordionSection>
 
           <AccordionSection
-            title="5. 配置 JSON"
+            title="5. SQL 片段（本地）"
+            expanded={openSections.snippets}
+            onToggle={() => toggle("snippets")}
+          >
+            <p style={hint}>
+              常用语句存配置 JSON，便于与团队共享。插入编辑器功能可后续再接侧栏。
+            </p>
+            {draft.sqlSnippets.map((sn) => (
+              <div key={sn.id} style={{ ...relBox, marginBottom: 10 }}>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
+                  <input
+                    style={{ ...inp, flex: "1 1 140px" }}
+                    placeholder="显示名称"
+                    value={sn.name}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setDraft((d) => ({
+                        ...d,
+                        sqlSnippets: d.sqlSnippets.map((x) =>
+                          x.id === sn.id ? { ...x, name: v } : x,
+                        ),
+                      }));
+                    }}
+                  />
+                  <button
+                    type="button"
+                    style={{ ...btnSm, color: "var(--danger-muted)" }}
+                    onClick={() =>
+                      setDraft((d) => ({
+                        ...d,
+                        sqlSnippets: d.sqlSnippets.filter((x) => x.id !== sn.id),
+                      }))
+                    }
+                  >
+                    删除
+                  </button>
+                </div>
+                <textarea
+                  style={{ ...ta, minHeight: 72 }}
+                  placeholder="SQL 正文"
+                  value={sn.text}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setDraft((d) => ({
+                      ...d,
+                      sqlSnippets: d.sqlSnippets.map((x) =>
+                        x.id === sn.id ? { ...x, text: v } : x,
+                      ),
+                    }));
+                  }}
+                />
+              </div>
+            ))}
+            <button
+              type="button"
+              style={btn}
+              onClick={() =>
+                setDraft((d) => ({
+                  ...d,
+                  sqlSnippets: [...d.sqlSnippets, newSnippet()],
+                }))
+              }
+            >
+              ＋ 新建片段
+            </button>
+          </AccordionSection>
+
+          <AccordionSection
+            title="6. 配置 JSON"
             expanded={openSections.json}
             onToggle={() => toggle("json")}
             sectionRef={jsonBlockRef}

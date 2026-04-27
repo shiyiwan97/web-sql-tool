@@ -47,9 +47,10 @@ export function createDefaultConfig(): AppConfig {
     sqlFormatting: {
       maxCharsPerLine: 72,
       showColumnGuide: false,
-      wrapLongLines: true,
+      editorLineBreak: "soft",
       compressLevel: 0,
     },
+    sqlSnippets: [],
     tableRelationSourcePath: null,
     relationIndex: { byTable: {} },
     tableCatalog: [
@@ -70,7 +71,7 @@ export function createDefaultConfig(): AppConfig {
       },
     ],
     sidebarLayout: {
-      left: ["search"],
+      left: ["search", "savedSql"],
       right: ["quickInsert"],
     },
     quickInserts: [
@@ -83,6 +84,7 @@ export function createDefaultConfig(): AppConfig {
     ],
     hotkeys: {
       copyCurrentBlock: "Ctrl+Shift+C",
+      saveEditorSql: "Ctrl+Alt+S",
     },
   };
 }
@@ -131,12 +133,10 @@ export function normalizeConfig(raw: unknown): AppConfig {
         typeof sf?.showColumnGuide === "boolean"
           ? sf.showColumnGuide
           : base.sqlFormatting.showColumnGuide,
-      wrapLongLines:
-        typeof sf?.wrapLongLines === "boolean"
-          ? sf.wrapLongLines
-          : base.sqlFormatting.wrapLongLines,
+      editorLineBreak: normalizeEditorLineBreak(sf, base.sqlFormatting.editorLineBreak),
       compressLevel: normalizeCompressLevel(sf, base.sqlFormatting.compressLevel),
     },
+    sqlSnippets: normalizeSqlSnippets(o.sqlSnippets, base.sqlSnippets),
     tableResolution:
       typeof o.tableResolution === "object" && o.tableResolution
         ? (o.tableResolution as AppConfig["tableResolution"])
@@ -182,6 +182,35 @@ type TableCatalogInput = {
   fields?: string[];
 };
 
+function normalizeEditorLineBreak(
+  sf: Partial<AppConfig["sqlFormatting"]> & { wrapLongLines?: boolean } | null,
+  fallback: AppConfig["sqlFormatting"]["editorLineBreak"],
+): AppConfig["sqlFormatting"]["editorLineBreak"] {
+  if (!sf) return fallback;
+  if (sf.editorLineBreak === "soft" || sf.editorLineBreak === "hard") {
+    return sf.editorLineBreak;
+  }
+  if (typeof sf.wrapLongLines === "boolean") {
+    return sf.wrapLongLines ? "soft" : "hard";
+  }
+  return fallback;
+}
+
+function normalizeSqlSnippets(
+  raw: unknown,
+  fallback: AppConfig["sqlSnippets"],
+): AppConfig["sqlSnippets"] {
+  if (!Array.isArray(raw)) return [...fallback];
+  return raw.map((x, i) => {
+    const o = x as Record<string, unknown>;
+    return {
+      id: String(o.id ?? `snip-import-${i}`),
+      name: String(o.name ?? ""),
+      text: String(o.text ?? ""),
+    };
+  });
+}
+
 function normalizeCompressLevel(
   sf: Partial<AppConfig["sqlFormatting"]> | null,
   fallback: SqlCompressLevel,
@@ -201,7 +230,7 @@ function normalizeCompressLevel(
 
 type PanelSlot = SidebarLayout["left"][number];
 
-const ALL_SLOTS: PanelSlot[] = ["search", "quickInsert"];
+const ALL_SLOTS: PanelSlot[] = ["search", "savedSql", "quickInsert"];
 
 function normalizeSidebarLayout(
   raw: unknown,
@@ -242,7 +271,7 @@ function parsePanelColumn(raw: unknown): PanelSlot[] {
   const out: PanelSlot[] = [];
   for (const x of raw) {
     const s = String(x);
-    if (s === "search" || s === "quickInsert") out.push(s);
+    if (s === "search" || s === "savedSql" || s === "quickInsert") out.push(s);
   }
   return out;
 }
@@ -268,6 +297,7 @@ function normalizeHotkeys(raw: unknown, fallback: HotkeyConfig): HotkeyConfig {
   const h = raw as Record<string, unknown>;
   return {
     copyCurrentBlock: String(h.copyCurrentBlock ?? fallback.copyCurrentBlock),
+    saveEditorSql: String(h.saveEditorSql ?? fallback.saveEditorSql),
   };
 }
 

@@ -1,0 +1,9 @@
+     A* TEST STUDENT — 学生
+     A* Pair with ../cpy/STUDENT.cbl
+     A          R STUDENTF
+     A            STUID       10A
+     A            GCLSID       8A
+     A            STUNM       30A
+     A            GENDER       1A
+     A            BIRTHDT      8S 0
+     A          K STUID

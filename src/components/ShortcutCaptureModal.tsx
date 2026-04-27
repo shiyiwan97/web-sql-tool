@@ -19,6 +19,8 @@ export type ShortcutCaptureModalProps = {
   onConfirm: (shortcut: string) => void;
   /** 确定按钮文案 */
   confirmLabel?: string;
+  /** 叠在其它弹窗之上时提高层级（默认 12000） */
+  zIndex?: number;
 };
 
 export function ShortcutCaptureModal({
@@ -29,6 +31,7 @@ export function ShortcutCaptureModal({
   onClose,
   onConfirm,
   confirmLabel = "确定",
+  zIndex = 12000,
 }: ShortcutCaptureModalProps) {
   const [captured, setCaptured] = useState(initialShortcut);
   const liveRef = useRef("");
@@ -74,7 +77,7 @@ export function ShortcutCaptureModal({
 
   return (
     <div
-      style={overlay}
+      style={{ ...overlay, zIndex }}
       role="dialog"
       aria-modal="true"
       aria-labelledby="shortcut-capture-title"
@@ -141,7 +144,6 @@ const overlay: CSSProperties = {
   display: "flex",
   alignItems: "center",
   justifyContent: "center",
-  zIndex: 5000,
   padding: 16,
 };
 
