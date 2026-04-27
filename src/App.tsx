@@ -42,6 +42,7 @@ import {
   persistSavedSqlSlots,
   type SavedSqlSlot,
 } from "./lib/savedSqlStorage";
+import { installMonacoFindWidgetWorkaround } from "./lib/monacoFindWidgetWorkaround";
 
 const DEFAULT_SQL = `SELECT *
 FROM LIB.STUDENT s
@@ -280,100 +281,12 @@ export default function App() {
     setSavedSqlSlots((slots) => slots.filter((s) => s.id !== id));
   }, []);
 
-  /**
-   * Monaco Find Widget 的按钮会带原生 title（含快捷键），在部分 Chromium 场景下
-   * 可能出现 tooltip 抖动并干扰点击。这里在 find-widget 局部剥离 title：
-   * - 仅观察 find-widget 子树，避免编辑器全量 mutation 带来的频繁回调；
-   * - 在 mouseover 捕获阶段即时剥离目标 title，阻止原生 tooltip 计时开始。
-   * `aria-label` 保留，不影响键盘导航和读屏。
-   */
   useEffect(() => {
     const ed = editorRef.current;
     if (!ed || monacoReadyTick === 0) return;
     const root = ed.getDomNode();
     if (!root) return;
-
-    const stripTitlesInFindWidget = () => {
-      const fw = root.querySelector(".find-widget");
-      if (!fw) return;
-      if (fw.hasAttribute("title")) fw.removeAttribute("title");
-      fw.querySelectorAll("[title]").forEach((el) => {
-        el.removeAttribute("title");
-      });
-    };
-
-    const setFindOpenClass = () => {
-      const open = !!root.querySelector(".find-widget.visible");
-      document.body.classList.toggle("find-widget-open", open);
-    };
-
-    const stripTitlesFromTarget = (target: EventTarget | null) => {
-      if (!(target instanceof Element)) return;
-      const fw = target.closest(".find-widget");
-      if (!fw) return;
-      if (target.hasAttribute("title")) target.removeAttribute("title");
-      let p: Element | null = target.parentElement;
-      while (p && p !== fw.parentElement) {
-        if (p.hasAttribute("title")) p.removeAttribute("title");
-        if (p === fw) break;
-        p = p.parentElement;
-      }
-    };
-
-    /**
-     * 参考 monaco-editor#5137：Find Widget 的 tooltip 来自原生 `title`，位置不可控且会挡住按钮。
-     * 解决思路：剥离 `title`，并在应用侧实现一个“永远朝下”的自绘 tooltip（pointer-events: none）。
-     */
-    const onMouseOverCapture = (e: Event) => {
-      stripTitlesFromTarget(e.target);
-      stripTitlesInFindWidget();
-    };
-    const onFocusInCapture = (e: Event) => {
-      stripTitlesFromTarget(e.target);
-      stripTitlesInFindWidget();
-    };
-    const onMouseMoveCapture = (e: Event) => {
-      // mouseover 可能在 tooltip 出现前没有再次触发；mousemove 更稳定
-      stripTitlesFromTarget(e.target);
-      stripTitlesInFindWidget();
-    };
-
-    stripTitlesInFindWidget();
-    setFindOpenClass();
-    const isFindWidgetMutation = (m: MutationRecord) => {
-      if (!(m.target instanceof Element)) return false;
-      if (m.target.closest(".find-widget")) return true;
-      if (m.type !== "childList") return false;
-      for (const n of m.addedNodes) {
-        if (!(n instanceof Element)) continue;
-        if (n.classList.contains("find-widget") || n.querySelector(".find-widget")) {
-          return true;
-        }
-      }
-      return false;
-    };
-    const mo = new MutationObserver((records) => {
-      if (records.some(isFindWidgetMutation)) {
-        stripTitlesInFindWidget();
-        setFindOpenClass();
-      }
-    });
-    mo.observe(root, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      attributeFilter: ["title"],
-    });
-    root.addEventListener("mouseover", onMouseOverCapture, true);
-    root.addEventListener("focusin", onFocusInCapture, true);
-    root.addEventListener("mousemove", onMouseMoveCapture, true);
-    return () => {
-      mo.disconnect();
-      root.removeEventListener("mouseover", onMouseOverCapture, true);
-      root.removeEventListener("focusin", onFocusInCapture, true);
-      root.removeEventListener("mousemove", onMouseMoveCapture, true);
-      document.body.classList.remove("find-widget-open");
-    };
+    return installMonacoFindWidgetWorkaround(root);
   }, [monacoReadyTick]);
 
   // 硬换行：监听输入，超过行长后自动插入真实换行符
