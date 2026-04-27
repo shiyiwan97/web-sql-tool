@@ -53,10 +53,19 @@ export function installMonacoFindWidgetWorkaround(root: HTMLElement): () => void
     // More reliable than mouseover: keeps titles suppressed while hovering.
     stripTitlesFromTarget(e.target);
     stripTitlesInFindWidget();
+    // Keep body class in sync even if visibility toggles without title mutations.
+    setFindOpenClass();
   };
 
   const isFindWidgetMutation = (m: MutationRecord) => {
     if (!(m.target instanceof Element)) return false;
+    // Find widget becomes visible by toggling a class; capture that.
+    if (m.type === "attributes" && m.attributeName === "class") {
+      return (
+        m.target.classList.contains("find-widget") ||
+        !!m.target.closest(".find-widget")
+      );
+    }
     if (m.target.closest(".find-widget")) return true;
     if (m.type !== "childList") return false;
     for (const n of m.addedNodes) {
@@ -81,7 +90,7 @@ export function installMonacoFindWidgetWorkaround(root: HTMLElement): () => void
     subtree: true,
     childList: true,
     attributes: true,
-    attributeFilter: ["title"],
+    attributeFilter: ["title", "class"],
   });
 
   root.addEventListener("mouseover", onMouseOverCapture, true);
