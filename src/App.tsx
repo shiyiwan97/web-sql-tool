@@ -73,6 +73,7 @@ export default function App() {
   const [jsonFocusTick, setJsonFocusTick] = useState(0);
   const [monacoReadyTick, setMonacoReadyTick] = useState(0);
   const [curBlock, setCurBlock] = useState({ i: 1, n: 1 });
+  const [cursorLc, setCursorLc] = useState({ line: 1, col: 1 });
   const [editorFontSize, setEditorFontSize] = useState(13);
   const importRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -389,6 +390,7 @@ export default function App() {
       const n = countSqlBlocks(t);
       const idx = blockIndexAtOffset(t, model.getOffsetAt(pos));
       setCurBlock({ i: idx + 1, n: Math.max(1, n) });
+      setCursorLc({ line: pos.lineNumber, col: pos.column });
     };
     upd();
     const d1 = ed.onDidChangeCursorPosition(upd);
@@ -787,8 +789,17 @@ export default function App() {
               color: "var(--text-muted)",
             }}
           >
-            Monaco · SQL · 当前块 {curBlock.i}/{curBlock.n}（以分号分隔；复制不含分号）·
-            软换行＝仅视觉折行、行号不变；硬换行＝真实换行、行号增加（「重排」）· Ctrl+滚轮 调字号
+            {config.debugMode ? (
+              <>
+                Monaco · SQL · 当前块 {curBlock.i}/{curBlock.n}（以分号分隔；复制不含分号）· Ln{" "}
+                {cursorLc.line}, Col {cursorLc.col} · 软换行＝仅视觉折行、行号不变；硬换行＝真实换行、行号增加（「重排」）·
+                Ctrl+滚轮 调字号
+              </>
+            ) : (
+              <>
+                当前块 {curBlock.i}/{curBlock.n} · Ln {cursorLc.line}, Col {cursorLc.col}
+              </>
+            )}
           </div>
           <div style={{ flex: 1, minHeight: 200 }}>
             <Editor

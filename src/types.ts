@@ -94,6 +94,8 @@ export interface AppConfig {
   version: number;
   /** 界面主题 */
   theme: UiTheme;
+  /** Debug 模式：展示更完整的状态栏信息 */
+  debugMode: boolean;
   ddsCopybookPathGroups: DdsCopybookPathGroup[];
   tableResolution: { description: string };
   relations: TableRelation[];

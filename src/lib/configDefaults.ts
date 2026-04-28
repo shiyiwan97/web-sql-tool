@@ -14,6 +14,7 @@ export function createDefaultConfig(): AppConfig {
   return {
     version: 1,
     theme: "dark",
+    debugMode: false,
     ddsCopybookPathGroups: [
       {
         order: 0,
@@ -103,6 +104,7 @@ export function normalizeConfig(raw: unknown): AppConfig {
     ...base,
     version: typeof o.version === "number" ? o.version : base.version,
     theme: o.theme === "light" || o.theme === "dark" ? o.theme : base.theme,
+    debugMode: Boolean(o.debugMode ?? base.debugMode),
     ddsCopybookPathGroups: Array.isArray(o.ddsCopybookPathGroups)
       ? (o.ddsCopybookPathGroups as AppConfig["ddsCopybookPathGroups"]).map(
           (g, i) => ({

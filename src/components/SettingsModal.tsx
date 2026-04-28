@@ -711,6 +711,23 @@ export function SettingsModal({
               开启「行长竖线」时，编辑器在该列绘制参考线。AS400
               满行衔接时会在下一行行首补空格以防终端拼行。
             </p>
+
+            <div style={{ marginTop: 12 }}>
+              <label style={lbl2}>Debug 模式</label>
+              <select
+                style={inp}
+                value={draft.debugMode ? "y" : "n"}
+                onChange={(e) =>
+                  setDraft((d) => ({ ...d, debugMode: e.target.value === "y" }))
+                }
+              >
+                <option value="n">关闭（仅显示当前块与行列）</option>
+                <option value="y">开启（显示完整提示信息）</option>
+              </select>
+              <div style={{ ...hint, marginTop: 6 }}>
+                开启后，编辑器顶部状态栏会显示更完整的说明文字，便于排查交互/快捷键问题。
+              </div>
+            </div>
             <div style={{ marginTop: 14 }}>
               <label style={lbl2}>压缩等级预览（固定样例 SQL）</label>
               <div
