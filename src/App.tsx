@@ -12,7 +12,8 @@ import { QuickInsertPanel } from "./components/QuickInsertPanel";
 import { SavedSqlPanel } from "./components/SavedSqlPanel";
 import { HotkeysSettingsModal } from "./components/HotkeysSettingsModal";
 import type { AppConfig, PanelSlot, SqlCompressLevel } from "./types";
-import { loadConfig, saveConfig } from "./lib/storage";
+import { loadConfigBundle, saveConfigBundle } from "./lib/storage";
+import { resolveConfig, type ConfigBundle, normalizeBundle } from "./lib/configBundle";
 import {
   applySqlFormatting,
   extractAliasedTables,
@@ -57,8 +58,9 @@ WHERE e.SUBJECT = 'MATH'
 `;
 
 export default function App() {
+  const [bundle, setBundle] = useState<ConfigBundle>(() => loadConfigBundle());
   const [config, setConfig] = useState<AppConfig>(() => {
-    const c = loadConfig();
+    const c = resolveConfig(loadConfigBundle());
     document.documentElement.dataset.theme = c.theme;
     return c;
   });
@@ -85,8 +87,8 @@ export default function App() {
   const prevLineBreakRef = useRef<"soft" | "hard">(config.sqlFormatting.editorLineBreak);
   const autoHardWrapRef = useRef(false);
   useEffect(() => {
-    saveConfig(config);
-  }, [config]);
+    saveConfigBundle(bundle);
+  }, [bundle]);
 
   useEffect(() => {
     persistSavedSqlSlots(savedSqlSlots);
@@ -143,14 +145,19 @@ export default function App() {
   }, [settingsOpen, config.theme]);
 
   const patchConfig = useCallback((fn: (c: AppConfig) => AppConfig) => {
-    setConfig(fn);
+    setBundle((b) => {
+      const nextPrivate = fn(resolveConfig(b));
+      const next = { ...b, privateConfig: nextPrivate };
+      setConfig(resolveConfig(next));
+      return next;
+    });
   }, []);
 
   const openSettings = useCallback(() => setSettingsOpen(true), []);
   const bumpJsonFocus = useCallback(() => setJsonFocusTick((n) => n + 1), []);
 
   const onExportConfig = useCallback(() => {
-    const blob = new Blob([JSON.stringify(config, null, 2)], {
+    const blob = new Blob([JSON.stringify(bundle, null, 2)], {
       type: "application/json;charset=utf-8",
     });
     const a = document.createElement("a");
@@ -158,7 +165,7 @@ export default function App() {
     a.download = "sql-web-tool-config.json";
     a.click();
     URL.revokeObjectURL(a.href);
-  }, [config]);
+  }, [bundle]);
 
   const onImportFile = useCallback((file: File | null) => {
     if (!file) return;
@@ -166,13 +173,24 @@ export default function App() {
     reader.onload = () => {
       try {
         const parsed = JSON.parse(String(reader.result));
-        setConfig(normalizeConfig(parsed));
+        // Accept either a bundle or a single config (treated as privateConfig)
+        const maybeBundle = normalizeBundle(parsed);
+        const isBundleLike =
+          parsed &&
+          typeof parsed === "object" &&
+          "publicConfig" in (parsed as any) &&
+          "privateConfig" in (parsed as any);
+        const nextBundle = isBundleLike
+          ? maybeBundle
+          : { ...bundle, privateConfig: normalizeConfig(parsed) };
+        setBundle(nextBundle);
+        setConfig(resolveConfig(nextBundle));
       } catch (e) {
         alert(`导入失败：${e instanceof Error ? e.message : e}`);
       }
     };
     reader.readAsText(file, "UTF-8");
-  }, []);
+  }, [bundle]);
 
   const getCopyBlockText = useCallback(() => {
     const ed = editorRef.current;

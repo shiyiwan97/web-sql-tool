@@ -105,19 +105,10 @@ export function normalizeConfig(raw: unknown): AppConfig {
     version: typeof o.version === "number" ? o.version : base.version,
     theme: o.theme === "light" || o.theme === "dark" ? o.theme : base.theme,
     debugMode: Boolean(o.debugMode ?? base.debugMode),
-    ddsCopybookPathGroups: Array.isArray(o.ddsCopybookPathGroups)
-      ? (o.ddsCopybookPathGroups as AppConfig["ddsCopybookPathGroups"]).map(
-          (g, i) => ({
-            order: typeof g.order === "number" ? g.order : i,
-            ddsPath: String(g.ddsPath ?? ""),
-            copybookPath: String(g.copybookPath ?? ""),
-            pairing: {
-              ddsSuffix: String(g.pairing?.ddsSuffix ?? ".dds"),
-              copybookSuffix: String(g.pairing?.copybookSuffix ?? ".cbl"),
-            },
-          }),
-        )
-      : base.ddsCopybookPathGroups,
+    ddsCopybookPathGroups: normalizePathGroups(
+      o.ddsCopybookPathGroups,
+      base.ddsCopybookPathGroups,
+    ),
     relations: Array.isArray(o.relations)
       ? (o.relations as TableRelationInput[]).map((r, i) => ({
           id: String(r.id ?? `rel-import-${i}`),
@@ -292,6 +283,28 @@ function normalizeQuickInserts(
       key: String(o.key ?? ""),
       value: String(o.value ?? ""),
       shortcut: String(o.shortcut ?? ""),
+    };
+  });
+}
+
+function normalizePathGroups(
+  raw: unknown,
+  fallback: AppConfig["ddsCopybookPathGroups"],
+): AppConfig["ddsCopybookPathGroups"] {
+  if (!Array.isArray(raw)) return fallback.map((x) => ({ ...x }));
+  return raw.map((g, i) => {
+    const o = g as Record<string, unknown>;
+    return {
+      order: typeof o.order === "number" ? o.order : i,
+      ddsPath: String(o.ddsPath ?? ""),
+      copybookPath: String(o.copybookPath ?? ""),
+      ddsDirHandleKey: typeof o.ddsDirHandleKey === "string" ? o.ddsDirHandleKey : undefined,
+      copybookDirHandleKey:
+        typeof o.copybookDirHandleKey === "string" ? o.copybookDirHandleKey : undefined,
+      pairing: {
+        ddsSuffix: String((o.pairing as any)?.ddsSuffix ?? ".dds"),
+        copybookSuffix: String((o.pairing as any)?.copybookSuffix ?? ".cbl"),
+      },
     };
   });
 }

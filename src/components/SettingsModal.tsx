@@ -18,6 +18,8 @@ import type {
 } from "../types";
 import { normalizeConfig } from "../lib/configDefaults";
 import { applySqlFormatting } from "../lib/sqlEditorOps";
+import { saveDirectoryHandle } from "../lib/fsHandleStore";
+import { buildSchemaCatalogFromHandles } from "../lib/schemaCatalogBrowser";
 
 type Props = {
   open: boolean;
@@ -221,6 +223,71 @@ export function SettingsModal({
     );
   };
 
+  const pickDir = async (
+    kind: "dds" | "copybook",
+    groupIndex: number,
+  ) => {
+    if (!("showDirectoryPicker" in window)) {
+      alert("当前浏览器不支持目录选择（File System Access API）。请使用 Chromium 内核浏览器。");
+      return;
+    }
+    try {
+      const handle = await (window as any).showDirectoryPicker();
+      const key = `dir-${kind}-${groupIndex}`;
+      await saveDirectoryHandle(key, handle);
+      setGroups(
+        draft.ddsCopybookPathGroups.map((g, i) => {
+          if (i !== groupIndex) return g;
+          if (kind === "dds") {
+            return { ...g, ddsPath: handle.name ?? g.ddsPath, ddsDirHandleKey: key };
+          }
+          return {
+            ...g,
+            copybookPath: handle.name ?? g.copybookPath,
+            copybookDirHandleKey: key,
+          };
+        }),
+      );
+    } catch (e) {
+      // user cancelled
+      if (e instanceof DOMException && e.name === "AbortError") return;
+      alert(`选择目录失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
+  const parseGroup = async (groupIndex: number) => {
+    const g = draft.ddsCopybookPathGroups[groupIndex];
+    if (!g) return;
+    if (!g.ddsDirHandleKey || !g.copybookDirHandleKey) {
+      alert("请先为该组选择 DDS 与 Copybook 目录。");
+      return;
+    }
+    try {
+      const schemas = await buildSchemaCatalogFromHandles({
+        ddsDirHandleKey: g.ddsDirHandleKey,
+        copybookDirHandleKey: g.copybookDirHandleKey,
+        ddsSuffix: g.pairing.ddsSuffix,
+        copybookSuffix: g.pairing.copybookSuffix,
+      });
+      // 合并进 tableCatalog（同名表以靠前组为准：这里只追加不存在的）
+      setDraft((d) => {
+        const existing = new Set(d.tableCatalog.map((t) => t.table.toUpperCase()));
+        const add = schemas
+          .filter((s) => !existing.has(s.table.toUpperCase()))
+          .map((s) => ({
+            table: s.table,
+            qualifiedName: s.qualifiedName,
+            fields: s.fields,
+            primaryKeys: s.primaryKeys,
+          }));
+        return { ...d, tableCatalog: [...d.tableCatalog, ...add] };
+      });
+      alert(`解析完成：新增 ${schemas.length} 张表（已自动去重/合并）。`);
+    } catch (e) {
+      alert(`解析失败：${e instanceof Error ? e.message : String(e)}`);
+    }
+  };
+
   const addGroup = () => {
     setGroups([
       ...draft.ddsCopybookPathGroups,
@@ -358,33 +425,47 @@ export function SettingsModal({
                   <div style={row2}>
                     <div style={{ minWidth: 0 }}>
                       <label style={lbl2}>DDS 路径</label>
-                      <input
-                        style={inp}
-                        value={g.ddsPath}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setGroups(
-                            draft.ddsCopybookPathGroups.map((x, i) =>
-                              i === idx ? { ...x, ddsPath: v } : x,
-                            ),
-                          );
-                        }}
-                      />
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <input
+                          style={{ ...inp, flex: 1 }}
+                          value={g.ddsPath}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setGroups(
+                              draft.ddsCopybookPathGroups.map((x, i) =>
+                                i === idx ? { ...x, ddsPath: v } : x,
+                              ),
+                            );
+                          }}
+                        />
+                        <button type="button" style={btnSm} onClick={() => pickDir("dds", idx)}>
+                          选择…
+                        </button>
+                      </div>
                     </div>
                     <div style={{ minWidth: 0 }}>
                       <label style={lbl2}>Copybook 路径</label>
-                      <input
-                        style={inp}
-                        value={g.copybookPath}
-                        onChange={(e) => {
-                          const v = e.target.value;
-                          setGroups(
-                            draft.ddsCopybookPathGroups.map((x, i) =>
-                              i === idx ? { ...x, copybookPath: v } : x,
-                            ),
-                          );
-                        }}
-                      />
+                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                        <input
+                          style={{ ...inp, flex: 1 }}
+                          value={g.copybookPath}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            setGroups(
+                              draft.ddsCopybookPathGroups.map((x, i) =>
+                                i === idx ? { ...x, copybookPath: v } : x,
+                              ),
+                            );
+                          }}
+                        />
+                        <button
+                          type="button"
+                          style={btnSm}
+                          onClick={() => pickDir("copybook", idx)}
+                        >
+                          选择…
+                        </button>
+                      </div>
                     </div>
                   </div>
                   <div
@@ -395,6 +476,9 @@ export function SettingsModal({
                       flexWrap: "wrap",
                     }}
                   >
+                    <button type="button" style={btnSm} onClick={() => parseGroup(idx)}>
+                      解析该组
+                    </button>
                     <button
                       type="button"
                       style={btnSm}

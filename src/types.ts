@@ -12,6 +12,10 @@ export interface DdsCopybookPathGroup {
   order: number;
   ddsPath: string;
   copybookPath: string;
+  /** Browser-only directory handle key (stored in IndexedDB); not exported in JSON */
+  ddsDirHandleKey?: string;
+  /** Browser-only directory handle key (stored in IndexedDB); not exported in JSON */
+  copybookDirHandleKey?: string;
   pairing: DdsCopybookPairing;
 }
 
@@ -53,6 +57,8 @@ export interface TableCatalogEntry {
   /** Optional qualified name for SQL snippets */
   qualifiedName?: string;
   fields: string[];
+  /** Primary key fields (best-effort from DDS) */
+  primaryKeys?: string[];
 }
 
 export interface RelationIndex {
