@@ -1,4 +1,4 @@
-type StoredHandle = FileSystemDirectoryHandle;
+type StoredHandle = FileSystemHandle;
 
 const DB_NAME = "sql-web-tool";
 const STORE = "fs-handles";
@@ -40,5 +40,15 @@ export async function loadDirectoryHandle(key: string): Promise<StoredHandle | n
   });
   db.close();
   return out;
+}
+
+export async function saveFileHandle(key: string, handle: FileSystemFileHandle): Promise<void> {
+  return saveDirectoryHandle(key, handle);
+}
+
+export async function loadFileHandle(key: string): Promise<FileSystemFileHandle | null> {
+  const h = await loadDirectoryHandle(key);
+  if (!h) return null;
+  return h as unknown as FileSystemFileHandle;
 }
 

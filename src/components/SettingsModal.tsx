@@ -9,17 +9,15 @@ import {
 } from "react";
 import type {
   AppConfig,
-  Cardinality,
   DdsCopybookPathGroup,
   SqlSnippet,
   SqlCompressLevel,
-  TableRelation,
   UiTheme,
 } from "../types";
 import { normalizeConfig } from "../lib/configDefaults";
 import { applySqlFormatting } from "../lib/sqlEditorOps";
-import { saveDirectoryHandle } from "../lib/fsHandleStore";
-import { buildSchemaCatalogFromHandles } from "../lib/schemaCatalogBrowser";
+import { saveFileHandle } from "../lib/fsHandleStore";
+import { analyzeSchemaCatalogFromCsvHandle } from "../lib/schemaCatalogBrowser";
 
 type Props = {
   open: boolean;
@@ -36,23 +34,6 @@ type SectionId =
   | "sqlfmt"
   | "snippets"
   | "json";
-
-const cardOpts: { v: Cardinality; label: string }[] = [
-  { v: "one-to-many", label: "一对多 (1:N)" },
-  { v: "many-to-one", label: "多对一 (N:1)" },
-  { v: "many-to-many", label: "多对多 (M:N)" },
-];
-
-function newRel(): TableRelation {
-  return {
-    id: `rel-${globalThis.crypto?.randomUUID?.() ?? String(Date.now())}`,
-    fromTable: "",
-    toTable: "",
-    cardinality: "one-to-many",
-    onClause: "",
-    joinKind: "LEFT",
-  };
-}
 
 function newSnippet(): SqlSnippet {
   return {
@@ -150,6 +131,9 @@ export function SettingsModal({
 }: Props) {
   const [draft, setDraft] = useState<AppConfig>(config);
   const [jsonText, setJsonText] = useState("");
+  const [schemaReports, setSchemaReports] = useState<Record<number, { ok: boolean; text: string }>>(
+    {},
+  );
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>({
     basic: true,
     paths: true,
@@ -223,51 +207,46 @@ export function SettingsModal({
     );
   };
 
-  const pickDir = async (
-    kind: "dds" | "copybook",
-    groupIndex: number,
-  ) => {
-    if (!("showDirectoryPicker" in window)) {
-      alert("当前浏览器不支持目录选择（File System Access API）。请使用 Chromium 内核浏览器。");
+  const pickSchemaCsv = async (groupIndex: number) => {
+    if (!("showOpenFilePicker" in window)) {
+      alert("当前浏览器不支持文件选择（File System Access API）。请使用 Chromium 内核浏览器。");
       return;
     }
     try {
-      const handle = await (window as any).showDirectoryPicker();
-      const key = `dir-${kind}-${groupIndex}`;
-      await saveDirectoryHandle(key, handle);
+      const [handle] = await (window as any).showOpenFilePicker({
+        multiple: false,
+        types: [{ description: "Schema CSV", accept: { "text/csv": [".csv"] } }],
+      });
+      if (!handle) return;
+      const key = `file-schema-csv-${groupIndex}`;
+      await saveFileHandle(key, handle);
       setGroups(
-        draft.ddsCopybookPathGroups.map((g, i) => {
-          if (i !== groupIndex) return g;
-          if (kind === "dds") {
-            return { ...g, ddsPath: handle.name ?? g.ddsPath, ddsDirHandleKey: key };
-          }
-          return {
-            ...g,
-            copybookPath: handle.name ?? g.copybookPath,
-            copybookDirHandleKey: key,
-          };
-        }),
+        draft.ddsCopybookPathGroups.map((g, i) =>
+          i === groupIndex
+            ? {
+                ...g,
+                schemaCsvPath: handle.name ?? g.schemaCsvPath,
+                schemaCsvFileHandleKey: key,
+              }
+            : g,
+        ),
       );
     } catch (e) {
-      // user cancelled
       if (e instanceof DOMException && e.name === "AbortError") return;
-      alert(`选择目录失败：${e instanceof Error ? e.message : String(e)}`);
+      alert(`选择 CSV 失败：${e instanceof Error ? e.message : String(e)}`);
     }
   };
 
   const parseGroup = async (groupIndex: number) => {
     const g = draft.ddsCopybookPathGroups[groupIndex];
     if (!g) return;
-    if (!g.ddsDirHandleKey || !g.copybookDirHandleKey) {
-      alert("请先为该组选择 DDS 与 Copybook 目录。");
+    if (!g.schemaCsvFileHandleKey) {
+      alert("请先为该组选择 Schema CSV 文件。");
       return;
     }
     try {
-      const schemas = await buildSchemaCatalogFromHandles({
-        ddsDirHandleKey: g.ddsDirHandleKey,
-        copybookDirHandleKey: g.copybookDirHandleKey,
-        ddsSuffix: g.pairing.ddsSuffix,
-        copybookSuffix: g.pairing.copybookSuffix,
+      const { schemas, report } = await analyzeSchemaCatalogFromCsvHandle({
+        schemaCsvFileHandleKey: g.schemaCsvFileHandleKey,
       });
       // 合并进 tableCatalog（同名表以靠前组为准：这里只追加不存在的）
       setDraft((d) => {
@@ -279,12 +258,30 @@ export function SettingsModal({
             qualifiedName: s.qualifiedName,
             fields: s.fields,
             primaryKeys: s.primaryKeys,
+            fieldInfo: s.fieldInfo,
           }));
         return { ...d, tableCatalog: [...d.tableCatalog, ...add] };
       });
-      alert(`解析完成：新增 ${schemas.length} 张表（已自动去重/合并）。`);
+      const issuePreview = report.issues.slice(0, 6);
+      const summaryLines = [
+        `表：${report.tables}  字段：${report.fields}  行：${report.rows}/${report.lines}`,
+        `重复列：${report.duplicates}  Key 标记：${report.primaryKeyMarks}  Issues：${report.issues.length}`,
+        ...(issuePreview.length > 0
+          ? ["", ...issuePreview.map((it) => `L${it.line} ${it.kind}: ${it.message}`)]
+          : []),
+        ...(report.issues.length > issuePreview.length
+          ? ["", `... 还有 ${report.issues.length - issuePreview.length} 条问题未展示`]
+          : []),
+      ];
+      setSchemaReports((m) => ({
+        ...m,
+        [groupIndex]: { ok: report.issues.length === 0, text: summaryLines.join("\n") },
+      }));
     } catch (e) {
-      alert(`解析失败：${e instanceof Error ? e.message : String(e)}`);
+      setSchemaReports((m) => ({
+        ...m,
+        [groupIndex]: { ok: false, text: `解析失败：${e instanceof Error ? e.message : String(e)}` },
+      }));
     }
   };
 
@@ -293,8 +290,7 @@ export function SettingsModal({
       ...draft.ddsCopybookPathGroups,
       {
         order: draft.ddsCopybookPathGroups.length,
-        ddsPath: "",
-        copybookPath: "",
+        schemaCsvPath: "",
         pairing: { ddsSuffix: ".dds", copybookSuffix: ".cbl" },
       },
     ]);
@@ -336,14 +332,6 @@ export function SettingsModal({
   const applyAndClose = () => {
     onApply(draft);
     onClose();
-  };
-
-  /** 关系卡片：响应式网格，避免固定三列撑破容器导致无法滚动 */
-  const relGrid: CSSProperties = {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 160px), 1fr))",
-    gap: 8,
-    minWidth: 0,
   };
 
   return (
@@ -402,13 +390,13 @@ export function SettingsModal({
           </AccordionSection>
 
           <AccordionSection
-            title="2. DDS / Copybook 路径组（有序）"
+            title="2. Schema CSV 路径组（有序）"
             expanded={openSections.paths}
             onToggle={() => toggle("paths")}
           >
             <p style={hint}>
-              同组内按 <code>表名.dds</code> 与 <code>表名.cbl</code> 配对；多组时同名表以列表靠前为准。浏览器端仅保存路径字符串。
-              从 DDS / copybook 自动生成「表目录」尚在规划：可先用手工 JSON 或外部脚本生成后导入配置。
+              每组绑定一个 <code>schema.csv</code>（格式见 <code>tutorial.MD</code>）；多组时同名表以列表靠前为准。浏览器端仅保存路径字符串。
+              CSV 文件句柄（用于读取）会保存在 IndexedDB，不会进入导出 JSON。
             </p>
             <ol
               style={{
@@ -424,45 +412,21 @@ export function SettingsModal({
                   <span style={lbl}>排序 #{idx + 1}</span>
                   <div style={row2}>
                     <div style={{ minWidth: 0 }}>
-                      <label style={lbl2}>DDS 路径</label>
+                      <label style={lbl2}>Schema CSV</label>
                       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
                         <input
                           style={{ ...inp, flex: 1 }}
-                          value={g.ddsPath}
+                          value={g.schemaCsvPath}
                           onChange={(e) => {
                             const v = e.target.value;
                             setGroups(
                               draft.ddsCopybookPathGroups.map((x, i) =>
-                                i === idx ? { ...x, ddsPath: v } : x,
+                                i === idx ? { ...x, schemaCsvPath: v } : x,
                               ),
                             );
                           }}
                         />
-                        <button type="button" style={btnSm} onClick={() => pickDir("dds", idx)}>
-                          选择…
-                        </button>
-                      </div>
-                    </div>
-                    <div style={{ minWidth: 0 }}>
-                      <label style={lbl2}>Copybook 路径</label>
-                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                        <input
-                          style={{ ...inp, flex: 1 }}
-                          value={g.copybookPath}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            setGroups(
-                              draft.ddsCopybookPathGroups.map((x, i) =>
-                                i === idx ? { ...x, copybookPath: v } : x,
-                              ),
-                            );
-                          }}
-                        />
-                        <button
-                          type="button"
-                          style={btnSm}
-                          onClick={() => pickDir("copybook", idx)}
-                        >
+                        <button type="button" style={btnSm} onClick={() => pickSchemaCsv(idx)}>
                           选择…
                         </button>
                       </div>
@@ -505,6 +469,25 @@ export function SettingsModal({
                       删除组
                     </button>
                   </div>
+                  {schemaReports[idx] ? (
+                    <pre
+                      style={{
+                        marginTop: 10,
+                        marginBottom: 0,
+                        padding: 10,
+                        borderRadius: 8,
+                        border: "1px solid var(--border)",
+                        background: "var(--bg-app)",
+                        color: schemaReports[idx]!.ok ? "var(--text)" : "var(--danger-muted)",
+                        fontSize: 11,
+                        lineHeight: 1.5,
+                        whiteSpace: "pre-wrap",
+                        overflowWrap: "anywhere",
+                      }}
+                    >
+                      {schemaReports[idx]!.text}
+                    </pre>
+                  ) : null}
                 </li>
               ))}
             </ol>
@@ -522,156 +505,10 @@ export function SettingsModal({
             expanded={openSections.relations}
             onToggle={() => toggle("relations")}
           >
-            {draft.relations.map((r) => (
-              <div key={r.id} style={relBox}>
-                <div style={relGrid}>
-                  <div style={{ minWidth: 0 }}>
-                    <label style={lbl2}>From 表</label>
-                    <input
-                      style={inp}
-                      value={r.fromTable}
-                      onChange={(e) => {
-                        const v = e.target.value.toUpperCase();
-                        setDraft((d) => ({
-                          ...d,
-                          relations: d.relations.map((x) =>
-                            x.id === r.id ? { ...x, fromTable: v } : x,
-                          ),
-                        }));
-                      }}
-                    />
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <label style={lbl2}>To 表</label>
-                    <input
-                      style={inp}
-                      value={r.toTable}
-                      onChange={(e) => {
-                        const v = e.target.value.toUpperCase();
-                        setDraft((d) => ({
-                          ...d,
-                          relations: d.relations.map((x) =>
-                            x.id === r.id ? { ...x, toTable: v } : x,
-                          ),
-                        }));
-                      }}
-                    />
-                  </div>
-                  <div style={{ minWidth: 0 }}>
-                    <label style={lbl2}>基数</label>
-                    <select
-                      style={inp}
-                      value={r.cardinality}
-                      onChange={(e) => {
-                        const v = e.target.value as Cardinality;
-                        setDraft((d) => ({
-                          ...d,
-                          relations: d.relations.map((x) =>
-                            x.id === r.id ? { ...x, cardinality: v } : x,
-                          ),
-                        }));
-                      }}
-                    >
-                      {cardOpts.map((o) => (
-                        <option key={o.v} value={o.v}>
-                          {o.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-                <div style={{ marginTop: 8, minWidth: 0 }}>
-                  <label style={lbl2}>ON 条件（不含 ON 关键字）</label>
-                  <input
-                    style={inp}
-                    value={r.onClause}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setDraft((d) => ({
-                        ...d,
-                        relations: d.relations.map((x) =>
-                          x.id === r.id ? { ...x, onClause: v } : x,
-                        ),
-                      }));
-                    }}
-                  />
-                </div>
-                <div
-                  style={{
-                    marginTop: 8,
-                    display: "flex",
-                    gap: 8,
-                    alignItems: "center",
-                    flexWrap: "wrap",
-                    minWidth: 0,
-                  }}
-                >
-                  <label style={{ ...lbl2, marginBottom: 0 }}>JOIN</label>
-                  <select
-                    style={{ ...inp, maxWidth: 140, width: "auto" }}
-                    value={r.joinKind ?? "LEFT"}
-                    onChange={(e) => {
-                      const v = e.target.value === "INNER" ? "INNER" : "LEFT";
-                      setDraft((d) => ({
-                        ...d,
-                        relations: d.relations.map((x) =>
-                          x.id === r.id ? { ...x, joinKind: v } : x,
-                        ),
-                      }));
-                    }}
-                  >
-                    <option value="LEFT">LEFT</option>
-                    <option value="INNER">INNER</option>
-                  </select>
-                  <button
-                    type="button"
-                    style={btnSm}
-                    onClick={() =>
-                      setDraft((d) => ({
-                        ...d,
-                        relations: [
-                          ...d.relations,
-                          {
-                            ...r,
-                            id: `rel-${globalThis.crypto?.randomUUID?.() ?? String(Date.now())}`,
-                          },
-                        ],
-                      }))
-                    }
-                  >
-                    复制
-                  </button>
-                  <button
-                    type="button"
-                    style={{
-                      ...btnSm,
-                      marginLeft: "auto",
-                      color: "var(--danger-muted)",
-                    }}
-                    onClick={() =>
-                      setDraft((d) => ({
-                        ...d,
-                        relations: d.relations.filter((x) => x.id !== r.id),
-                      }))
-                    }
-                  >
-                    删除关系
-                  </button>
-                </div>
-              </div>
-            ))}
-            <button
-              type="button"
-              style={btn}
-              onClick={() =>
-                setDraft((d) => ({
-                  ...d,
-                  relations: [...d.relations, newRel()],
-                }))
-              }
-            >
-              ＋ 新建关系
-            </button>
+            <p style={hint}>
+              表关系数量通常很多，为避免「设置」变成大表单，关系编辑已移动到侧边栏的
+              <b>「表关系」</b>面板中（可拖拽停靠到左右侧边栏）。
+            </p>
             <div
               style={{
                 marginTop: 16,

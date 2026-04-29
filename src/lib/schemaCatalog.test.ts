@@ -1,22 +1,39 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { buildSchemaCatalog } from "./schemaCatalog";
-
-function read(p: string): string {
-  return readFileSync(p, "utf-8");
-}
 
 describe("buildSchemaCatalog", () => {
   it("pairs DDS + copybook by basename and extracts fields + PK", () => {
-    const root = join(process.cwd(), "test");
     const ddsFiles = [
-      { filename: "STUDENT.dds", text: read(join(root, "dds", "STUDENT.dds")) },
-      { filename: "GRADECLS.dds", text: read(join(root, "dds", "GRADECLS.dds")) },
+      {
+        filename: "STUDENT.dds",
+        text: `A          R STUDENTF
+A            STUID       10A
+A            GCLSID       8A
+A          K STUID
+`,
+      },
+      {
+        filename: "GRADECLS.dds",
+        text: `A          R GRADECLSF
+A            GCLSID       8A
+A          K GCLSID
+`,
+      },
     ];
     const copybookFiles = [
-      { filename: "STUDENT.cbl", text: read(join(root, "cpy", "STUDENT.cbl")) },
-      { filename: "GRADECLS.cbl", text: read(join(root, "cpy", "GRADECLS.cbl")) },
+      {
+        filename: "STUDENT.cbl",
+        text: `01  STUDENT-REC.
+  05 STUID PIC X(10).
+  05 GCLSID PIC X(08).
+`,
+      },
+      {
+        filename: "GRADECLS.cbl",
+        text: `01  GRADECLS-REC.
+  05 GCLSID PIC X(08).
+`,
+      },
     ];
     const out = buildSchemaCatalog({ ddsFiles, copybookFiles });
     const student = out.find((x) => x.table === "STUDENT");

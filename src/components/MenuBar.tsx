@@ -6,6 +6,7 @@ type Props = {
   onImportConfig: () => void;
   onExportConfig: () => void;
   onOpenHotkeys: () => void;
+  onOpenRelations: () => void;
 };
 
 export function MenuBar({
@@ -14,6 +15,7 @@ export function MenuBar({
   onImportConfig,
   onExportConfig,
   onOpenHotkeys,
+  onOpenRelations,
 }: Props) {
   const [open, setOpen] = useState<"file" | "settings" | null>(null);
 
@@ -95,6 +97,18 @@ export function MenuBar({
         </button>
         {open === "settings" && (
           <div style={dropdownStyle} role="menu">
+            <button
+              type="button"
+              className="menubar-dd-item"
+              style={itemStyle}
+              role="menuitem"
+              onClick={() => {
+                onOpenRelations();
+                setOpen(null);
+              }}
+            >
+              表关系…
+            </button>
             <button
               type="button"
               className="menubar-dd-item"

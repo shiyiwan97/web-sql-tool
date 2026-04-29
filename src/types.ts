@@ -1,4 +1,4 @@
-export type Cardinality = "one-to-many" | "many-to-one" | "many-to-many";
+export type Cardinality = "one-to-one" | "one-to-many" | "many-to-one" | "many-to-many";
 
 /** UI 主题（写入配置 JSON，随 localStorage 持久化） */
 export type UiTheme = "light" | "dark";
@@ -10,12 +10,10 @@ export interface DdsCopybookPairing {
 
 export interface DdsCopybookPathGroup {
   order: number;
-  ddsPath: string;
-  copybookPath: string;
-  /** Browser-only directory handle key (stored in IndexedDB); not exported in JSON */
-  ddsDirHandleKey?: string;
-  /** Browser-only directory handle key (stored in IndexedDB); not exported in JSON */
-  copybookDirHandleKey?: string;
+  /** Schema CSV file path/label */
+  schemaCsvPath: string;
+  /** Browser-only file handle key (stored in IndexedDB); not exported in JSON */
+  schemaCsvFileHandleKey?: string;
   pairing: DdsCopybookPairing;
 }
 
@@ -23,6 +21,8 @@ export interface TableRelation {
   id: string;
   fromTable: string;
   toTable: string;
+  /** Field pairs used to build ON preview; supports multi-column joins */
+  fieldPairs?: Array<{ fromField: string; toField: string }>;
   cardinality: Cardinality;
   /** Raw ON clause without ON keyword, e.g. "a.ID = b.ID" */
   onClause: string;
@@ -59,6 +59,17 @@ export interface TableCatalogEntry {
   fields: string[];
   /** Primary key fields (best-effort from DDS) */
   primaryKeys?: string[];
+  /** Optional per-field metadata for searchable dropdowns */
+  fieldInfo?: Record<
+    string,
+    {
+      comment?: string;
+      type?: string;
+      length?: number | null;
+      precision?: number | null;
+      isKey?: boolean;
+    }
+  >;
 }
 
 export interface RelationIndex {
@@ -69,6 +80,27 @@ export interface RelationIndex {
 
 /** 可停靠侧栏面板 */
 export type PanelSlot = "search" | "savedSql" | "quickInsert";
+
+export type SchemaCsvQualityIssue = {
+  line: number;
+  kind:
+    | "missing-table"
+    | "missing-column"
+    | "duplicate-column"
+    | "bad-length"
+    | "bad-precision";
+  message: string;
+};
+
+export type SchemaCsvQualityReport = {
+  lines: number;
+  rows: number;
+  tables: number;
+  fields: number;
+  primaryKeyMarks: number;
+  duplicates: number;
+  issues: SchemaCsvQualityIssue[];
+};
 
 export interface SidebarLayout {
   /** 左侧自上而下 */

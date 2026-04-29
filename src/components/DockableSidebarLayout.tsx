@@ -65,7 +65,8 @@ export function DockableSidebarColumn({
   const onDrop = (e: React.DragEvent) => {
     e.preventDefault();
     const raw = e.dataTransfer.getData(dragMime());
-    if (raw !== "search" && raw !== "savedSql" && raw !== "quickInsert") return;
+    if (raw !== "search" && raw !== "savedSql" && raw !== "quickInsert")
+      return;
     const slot = raw as PanelSlot;
     const el = e.currentTarget as HTMLElement;
     const idx = insertIndexFromPointer(el, e.clientY);

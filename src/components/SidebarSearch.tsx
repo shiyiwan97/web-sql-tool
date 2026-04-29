@@ -93,7 +93,7 @@ export function SidebarSearch({ config, onPickTable, onPickField }: Props) {
               onChange={(e) => setQ(e.target.value)}
               style={inputStyle}
             />
-            <ul style={{ listStyle: "none", margin: "8px 0 0", padding: 0, maxHeight: "min(360px, 45vh)", overflow: "auto" }}>
+            <ul style={{ listStyle: "none", margin: "8px 0 0", padding: 0 }}>
               {hits.map((h, i) =>
                 h.kind === "table" ? (
                   <li

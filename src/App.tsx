@@ -11,6 +11,8 @@ import {
 import { QuickInsertPanel } from "./components/QuickInsertPanel";
 import { SavedSqlPanel } from "./components/SavedSqlPanel";
 import { HotkeysSettingsModal } from "./components/HotkeysSettingsModal";
+import { CommandMenuModal } from "./components/CommandMenuModal";
+import { RelationsModal } from "./components/RelationsModal";
 import type { AppConfig, PanelSlot, SqlCompressLevel } from "./types";
 import { loadConfigBundle, saveConfigBundle } from "./lib/storage";
 import { resolveConfig, type ConfigBundle, normalizeBundle } from "./lib/configBundle";
@@ -45,6 +47,7 @@ import {
   type SavedSqlSlot,
 } from "./lib/savedSqlStorage";
 import { installMonacoFindWidgetWorkaround } from "./lib/monacoFindWidgetWorkaround";
+import { loadWorkspaceState, saveWorkspaceSql } from "./lib/workspaceStorage";
 
 const DEFAULT_SQL = `SELECT *
 FROM LIB.STUDENT s
@@ -64,9 +67,11 @@ export default function App() {
     document.documentElement.dataset.theme = c.theme;
     return c;
   });
-  const [sql, setSql] = useState(DEFAULT_SQL);
+  const [sql, setSql] = useState(() => loadWorkspaceState()?.sql ?? DEFAULT_SQL);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
+  const [commandMenuOpen, setCommandMenuOpen] = useState(false);
+  const [relationsOpen, setRelationsOpen] = useState(false);
   const [savedSqlSlots, setSavedSqlSlots] = useState<SavedSqlSlot[]>(loadSavedSqlSlots);
   const [savedSqlSelectedId, setSavedSqlSelectedId] = useState<string>(
     () => loadSavedSqlSlots()[0]?.id ?? "",
@@ -97,6 +102,12 @@ export default function App() {
   useEffect(() => {
     persistSidebarUi(sidebarUi);
   }, [sidebarUi]);
+
+  // Workspace autosave for editor SQL (debounced)
+  useEffect(() => {
+    const t = window.setTimeout(() => saveWorkspaceSql(sql), 350);
+    return () => clearTimeout(t);
+  }, [sql]);
 
   useEffect(() => {
     const n = config.sidebarLayout.left.length;
@@ -155,6 +166,28 @@ export default function App() {
 
   const openSettings = useCallback(() => setSettingsOpen(true), []);
   const bumpJsonFocus = useCallback(() => setJsonFocusTick((n) => n + 1), []);
+
+  // Ctrl+K: open command/shortcut menu
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const key = String(e.key || "").toLowerCase();
+      const isK = key === "k";
+      const mod = e.ctrlKey || e.metaKey;
+      if (!isK || !mod) return;
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName?.toLowerCase();
+      // Allow Ctrl+K even inside Monaco; block only for normal form inputs.
+      const isMonacoInput =
+        tag === "textarea" && (target?.classList?.contains("inputarea") || target?.closest?.(".monaco-editor"));
+      const isNormalFormInput =
+        (tag === "input" || tag === "textarea" || (target as any)?.isContentEditable) && !isMonacoInput;
+      if (isNormalFormInput) return;
+      e.preventDefault();
+      setCommandMenuOpen(true);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const onExportConfig = useCallback(() => {
     const blob = new Blob([JSON.stringify(bundle, null, 2)], {
@@ -681,6 +714,7 @@ export default function App() {
         onImportConfig={() => importRef.current?.click()}
         onExportConfig={onExportConfig}
         onOpenHotkeys={() => setHotkeysOpen(true)}
+        onOpenRelations={() => setRelationsOpen(true)}
       />
 
       <header
@@ -905,6 +939,31 @@ export default function App() {
         onApply={(next) =>
           setConfig((c) => ({ ...c, hotkeys: { ...c.hotkeys, ...next } }))
         }
+      />
+
+      <CommandMenuModal
+        open={commandMenuOpen}
+        config={config}
+        onClose={() => setCommandMenuOpen(false)}
+        onOpenSettings={() => {
+          setCommandMenuOpen(false);
+          setSettingsOpen(true);
+        }}
+        onOpenHotkeys={() => {
+          setCommandMenuOpen(false);
+          setHotkeysOpen(true);
+        }}
+        onOpenRelations={() => {
+          setCommandMenuOpen(false);
+          setRelationsOpen(true);
+        }}
+      />
+
+      <RelationsModal
+        open={relationsOpen}
+        config={config}
+        setConfig={patchConfig}
+        onClose={() => setRelationsOpen(false)}
       />
     </div>
   );

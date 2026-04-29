@@ -18,8 +18,7 @@ export function createDefaultConfig(): AppConfig {
     ddsCopybookPathGroups: [
       {
         order: 0,
-        ddsPath: "",
-        copybookPath: "",
+        schemaCsvPath: "",
         pairing: { ddsSuffix: ".dds", copybookSuffix: ".cbl" },
       },
     ],
@@ -114,6 +113,14 @@ export function normalizeConfig(raw: unknown): AppConfig {
           id: String(r.id ?? `rel-import-${i}`),
           fromTable: String(r.fromTable ?? "").toUpperCase(),
           toTable: String(r.toTable ?? "").toUpperCase(),
+          fieldPairs: Array.isArray(r.fieldPairs)
+            ? r.fieldPairs
+                .map((p) => ({
+                  fromField: String(p?.fromField ?? "").toUpperCase(),
+                  toField: String(p?.toField ?? "").toUpperCase(),
+                }))
+                .filter((p) => p.fromField && p.toField)
+            : undefined,
           cardinality: normalizeCardinality(r.cardinality),
           onClause: String(r.onClause ?? ""),
           joinKind: r.joinKind === "INNER" ? "INNER" : "LEFT",
@@ -153,6 +160,10 @@ export function normalizeConfig(raw: unknown): AppConfig {
           fields: Array.isArray(t.fields)
             ? t.fields.map((f) => String(f).toUpperCase())
             : [],
+          primaryKeys: Array.isArray(t.primaryKeys)
+            ? t.primaryKeys.map((f) => String(f).toUpperCase())
+            : undefined,
+          fieldInfo: normalizeFieldInfo(t.fieldInfo),
         }))
       : base.tableCatalog,
     sidebarLayout: normalizeSidebarLayout(o.sidebarLayout, base.sidebarLayout),
@@ -166,6 +177,7 @@ type TableRelationInput = {
   id?: string;
   fromTable?: string;
   toTable?: string;
+  fieldPairs?: Array<{ fromField?: string; toField?: string }>;
   cardinality?: string;
   onClause?: string;
   joinKind?: string;
@@ -175,7 +187,34 @@ type TableCatalogInput = {
   table?: string;
   qualifiedName?: string;
   fields?: string[];
+  primaryKeys?: string[];
+  fieldInfo?: Record<
+    string,
+    { comment?: unknown; type?: unknown; length?: unknown; precision?: unknown; isKey?: unknown }
+  >;
 };
+
+function normalizeFieldInfo(
+  raw: unknown,
+): AppConfig["tableCatalog"][number]["fieldInfo"] | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const o = raw as Record<string, any>;
+  const out: Record<string, any> = {};
+  for (const k of Object.keys(o)) {
+    const kk = String(k).toUpperCase();
+    const v = o[k];
+    if (!v || typeof v !== "object") continue;
+    out[kk] = {
+      comment: typeof v.comment === "string" ? v.comment : undefined,
+      type: typeof v.type === "string" ? v.type : undefined,
+      length: typeof v.length === "number" ? v.length : v.length == null ? null : undefined,
+      precision:
+        typeof v.precision === "number" ? v.precision : v.precision == null ? null : undefined,
+      isKey: typeof v.isKey === "boolean" ? v.isKey : undefined,
+    };
+  }
+  return Object.keys(out).length ? (out as any) : undefined;
+}
 
 function normalizeEditorLineBreak(
   sf: Partial<AppConfig["sqlFormatting"]> & { wrapLongLines?: boolean } | null,
@@ -296,11 +335,13 @@ function normalizePathGroups(
     const o = g as Record<string, unknown>;
     return {
       order: typeof o.order === "number" ? o.order : i,
-      ddsPath: String(o.ddsPath ?? ""),
-      copybookPath: String(o.copybookPath ?? ""),
-      ddsDirHandleKey: typeof o.ddsDirHandleKey === "string" ? o.ddsDirHandleKey : undefined,
-      copybookDirHandleKey:
-        typeof o.copybookDirHandleKey === "string" ? o.copybookDirHandleKey : undefined,
+      schemaCsvPath: String(o.schemaCsvPath ?? (o.ddsPath ?? "")),
+      schemaCsvFileHandleKey:
+        typeof o.schemaCsvFileHandleKey === "string"
+          ? o.schemaCsvFileHandleKey
+          : typeof o.ddsDirHandleKey === "string"
+            ? o.ddsDirHandleKey
+            : undefined,
       pairing: {
         ddsSuffix: String((o.pairing as any)?.ddsSuffix ?? ".dds"),
         copybookSuffix: String((o.pairing as any)?.copybookSuffix ?? ".cbl"),
@@ -326,6 +367,7 @@ function normalizeHotkeys(raw: unknown, fallback: HotkeyConfig): HotkeyConfig {
 
 function normalizeCardinality(c: string | undefined): AppConfig["relations"][0]["cardinality"] {
   const v = String(c ?? "").toLowerCase().replace(/\s+/g, "");
+  if (v === "one-to-one" || v === "1:1") return "one-to-one";
   if (v === "many-to-many" || v === "m:n") return "many-to-many";
   if (v === "many-to-one" || v === "n:1") return "many-to-one";
   if (v === "one-to-many" || v === "1:n") return "one-to-many";

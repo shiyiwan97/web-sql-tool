@@ -6,6 +6,17 @@ export type TableSchema = {
   qualifiedName?: string;
   fields: string[];
   primaryKeys: string[];
+  /** Optional per-field metadata (from CSV, etc.) */
+  fieldInfo?: Record<
+    string,
+    {
+      comment?: string;
+      type?: string;
+      length?: number | null;
+      precision?: number | null;
+      isKey?: boolean;
+    }
+  >;
   sources: {
     ddsFile?: string;
     copybookFile?: string;
