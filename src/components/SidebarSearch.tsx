@@ -1,5 +1,6 @@
 import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import type { AppConfig, TableCatalogEntry } from "../types";
+import { defaultAliasFor } from "../lib/sqlEditorOps";
 import { applyTypeMapping, styleFromText } from "./PanelStyleModal";
 
 type Props = {
@@ -233,7 +234,7 @@ export function SidebarSearch({ config, onPickTable, onPickField }: Props) {
                           >
                             {isPk ? <span style={pkBadge}>PK</span> : null}
                             <code style={{ ...fieldNameStyle, ...styleFromText(ps.fieldName) }}>
-                              {highlight(fh.field, q.trim())}
+                              {defaultAliasFor(e.table)}.{highlight(fh.field, q.trim())}
                             </code>
                             {typLabel ? (
                               <span style={{ ...typeStyle, ...styleFromText(ps.fieldType) }} title={typRaw}>

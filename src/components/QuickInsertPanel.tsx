@@ -1,6 +1,6 @@
 import { useState, type CSSProperties } from "react";
 import type { AppConfig, PanelBoxStyle, QuickInsertEntry } from "../types";
-import { ShortcutCaptureModal, type ShortcutConflictEntry } from "./ShortcutCaptureModal";
+import { ShortcutCaptureModal } from "./ShortcutCaptureModal";
 import { styleFromBox } from "./PanelStyleModal";
 
 type Props = {
@@ -141,26 +141,6 @@ export function QuickInsertPanel({ config, setConfig }: Props) {
           )
         }
         initialShortcut={captureRow?.shortcut ?? ""}
-        existingShortcuts={(() => {
-          const out: ShortcutConflictEntry[] = [];
-          for (const r of rows) {
-            if (r.id === captureRowId) continue;
-            if (r.shortcut) out.push({ label: `快捷赋值 · ${r.key || "(未命名)"}`, shortcut: r.shortcut });
-          }
-          const h = config.hotkeys;
-          const labels: Record<string, string> = {
-            copyCurrentBlock: "复制当前分号块",
-            saveEditorSql: "保存到「已存 SQL」",
-            compressLineOrSelection: "压缩当前行/区域",
-            compressCurrentBlock: "压缩当前分号块",
-            openSettings: "打开设置面板",
-          };
-          for (const k of Object.keys(labels)) {
-            const sc = (h as any)[k] as string;
-            if (sc) out.push({ label: `快捷键 · ${labels[k]}`, shortcut: sc });
-          }
-          return out;
-        })()}
         onClose={() => setCaptureRowId(null)}
         confirmLabel="保存"
         onConfirm={(s) => {

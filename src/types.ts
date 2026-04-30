@@ -222,8 +222,6 @@ export interface EditorAppearance {
   selectedLineBg: string;
   /** 当前光标行的行号颜色（active line number）；"" 表示沿用主题默认 */
   activeLineNumberFg: string;
-  /** 普通行的行号颜色；"" 表示沿用主题默认 */
-  lineNumberFg: string;
 }
 
 export interface AppConfig {

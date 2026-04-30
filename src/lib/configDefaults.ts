@@ -108,7 +108,6 @@ export function createDefaultEditorAppearance(): EditorAppearance {
     baseTheme: "auto",
     selectedLineBg: "",
     activeLineNumberFg: "",
-    lineNumberFg: "",
   };
 }
 
@@ -360,7 +359,6 @@ function normalizeEditorAppearance(raw: unknown, fb: EditorAppearance): EditorAp
     selectedLineBg: typeof o.selectedLineBg === "string" ? o.selectedLineBg : fb.selectedLineBg,
     activeLineNumberFg:
       typeof o.activeLineNumberFg === "string" ? o.activeLineNumberFg : fb.activeLineNumberFg,
-    lineNumberFg: typeof o.lineNumberFg === "string" ? o.lineNumberFg : fb.lineNumberFg,
   };
 }
 

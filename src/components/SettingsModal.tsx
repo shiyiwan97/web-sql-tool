@@ -232,12 +232,6 @@ function EditorAppearanceEditor({
         (v) => onChange({ ...value, activeLineNumberFg: v }),
         "#facc15 等",
       )}
-      {colorRow(
-        "普通行号 颜色",
-        value.lineNumberFg,
-        (v) => onChange({ ...value, lineNumberFg: v }),
-        "#6b7280 等",
-      )}
     </div>
   );
 }

@@ -1,18 +1,15 @@
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import type { AppConfig, TableCatalogEntry } from "../types";
-import { styleFromText } from "./PanelStyleModal";
 
 type Props = {
   open: boolean;
   config: AppConfig;
   onClose: () => void;
-  onOpenStyle?: () => void;
 };
 
-export function TableCatalogModal({ open, config, onClose, onOpenStyle }: Props) {
+export function TableCatalogModal({ open, config, onClose }: Props) {
   const [activeTable, setActiveTable] = useState<string>("");
   const [q, setQ] = useState("");
-  const ps = config.panelStyles.tableCatalog;
 
   useEffect(() => {
     if (!open) return;
@@ -59,16 +56,9 @@ export function TableCatalogModal({ open, config, onClose, onOpenStyle }: Props)
               共 {config.tableCatalog.length} 张表 · 字段总数 {config.tableCatalog.reduce((acc, t) => acc + t.fields.length, 0)}
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-            {onOpenStyle ? (
-              <button type="button" style={btnSm} onClick={onOpenStyle} title="设置表配置查看的字体/颜色">
-                样式…
-              </button>
-            ) : null}
-            <button type="button" style={btnSm} onClick={onClose}>
-              关闭
-            </button>
-          </div>
+          <button type="button" style={btnSm} onClick={onClose}>
+            关闭
+          </button>
         </div>
 
         <div style={body}>
@@ -116,11 +106,11 @@ export function TableCatalogModal({ open, config, onClose, onOpenStyle }: Props)
             ) : (
               <div>
                 <div style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 12 }}>
-                  <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text)", ...styleFromText(ps.tableName) }}>
+                  <div style={{ fontSize: 16, fontWeight: 700, color: "var(--text)" }}>
                     {active.qualifiedName ?? active.table}
                   </div>
                   {active.comment ? (
-                    <div style={{ fontSize: 12, color: "var(--text-muted)", ...styleFromText(ps.tableComment) }}>{active.comment}</div>
+                    <div style={{ fontSize: 12, color: "var(--text-muted)" }}>{active.comment}</div>
                   ) : null}
                   <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
                     字段 {active.fields.length}
@@ -168,8 +158,8 @@ export function TableCatalogModal({ open, config, onClose, onOpenStyle }: Props)
                         return (
                           <tr key={f} style={{ borderTop: "1px solid var(--border)" }}>
                             <td style={{ ...td, color: "var(--text-muted)" }}>{i + 1}</td>
-                            <td style={{ ...td, fontFamily: "var(--mono)", color: "#a7f3d0", ...styleFromText(ps.fieldName) }}>{f}</td>
-                            <td style={{ ...td, fontFamily: "var(--mono)", ...styleFromText(ps.fieldType) }}>{info?.type ?? ""}</td>
+                            <td style={{ ...td, fontFamily: "var(--mono)", color: "#a7f3d0" }}>{f}</td>
+                            <td style={{ ...td, fontFamily: "var(--mono)" }}>{info?.type ?? ""}</td>
                             <td style={td}>{info?.length ?? ""}</td>
                             <td style={td}>{info?.precision ?? ""}</td>
                             <td style={td}>
@@ -179,7 +169,7 @@ export function TableCatalogModal({ open, config, onClose, onOpenStyle }: Props)
                                 ""
                               )}
                             </td>
-                            <td style={{ ...td, ...styleFromText(ps.fieldComment) }}>{info?.comment ?? ""}</td>
+                            <td style={td}>{info?.comment ?? ""}</td>
                           </tr>
                         );
                       })}

@@ -579,6 +579,154 @@ export default function App() {
     return () => provider.dispose();
   }, [monacoReadyTick, config.tableCatalog]);
 
+  // 悬停：在表名 / 别名 / 字段上显示定义
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco || monacoReadyTick === 0) return;
+
+    const formatType = (info?: {
+      type?: string;
+      length?: number | null;
+      precision?: number | null;
+    }) => {
+      if (!info?.type) return "";
+      const len =
+        info.length != null
+          ? `(${info.length}${info.precision ? "," + info.precision : ""})`
+          : "";
+      return `${info.type}${len}`;
+    };
+
+    const tableMarkdown = (t: AppConfig["tableCatalog"][number]): string => {
+      const lines: string[] = [];
+      lines.push(`**Table** \`${t.qualifiedName ?? t.table}\``);
+      if (t.comment) lines.push(`> ${t.comment}`);
+      lines.push(`字段 ${t.fields.length}` + (t.primaryKeys?.length ? ` · 主键 ${t.primaryKeys.join(", ")}` : ""));
+      lines.push("");
+      lines.push("| 字段 | 类型 | 注释 |");
+      lines.push("| --- | --- | --- |");
+      for (const f of t.fields) {
+        const info = t.fieldInfo?.[f.toUpperCase()];
+        const pk = info?.isKey ? "🔑 " : "";
+        const ty = formatType(info) || "—";
+        const cm = (info?.comment ?? "").replace(/\|/g, "\\|");
+        lines.push(`| ${pk}\`${f}\` | \`${ty}\` | ${cm} |`);
+      }
+      return lines.join("\n");
+    };
+
+    const fieldMarkdown = (
+      table: AppConfig["tableCatalog"][number],
+      field: string,
+    ): string => {
+      const info = table.fieldInfo?.[field.toUpperCase()];
+      const ty = formatType(info) || "—";
+      const lines: string[] = [];
+      const pk = info?.isKey ? "🔑 " : "";
+      lines.push(`**${pk}Field** \`${table.table}.${field}\` · \`${ty}\``);
+      if (info?.comment) lines.push(`> ${info.comment}`);
+      else if (table.comment) lines.push(`> 表注释：${table.comment}`);
+      return lines.join("\n");
+    };
+
+    const provider = monaco.languages.registerHoverProvider("sql", {
+      provideHover: (model, position) => {
+        const wordAt = model.getWordAtPosition(position);
+        if (!wordAt) return null;
+        const word = wordAt.word;
+        const wordU = word.toUpperCase();
+        const range: Monaco.IRange = {
+          startLineNumber: position.lineNumber,
+          endLineNumber: position.lineNumber,
+          startColumn: wordAt.startColumn,
+          endColumn: wordAt.endColumn,
+        };
+        const catalog = configRef.current.tableCatalog;
+        if (catalog.length === 0) return null;
+
+        // 解析全文别名表
+        const aliasMap = new Map<string, string>(); // ALIAS / TABLE_BASENAME → table.table
+        for (const t of catalog) {
+          aliasMap.set(t.table.toUpperCase(), t.table);
+          if (t.qualifiedName) {
+            aliasMap.set(t.qualifiedName.toUpperCase(), t.table);
+            const last = t.qualifiedName.split(".").pop();
+            if (last) aliasMap.set(last.toUpperCase(), t.table);
+          }
+        }
+        try {
+          const fullText = model.getValue();
+          const re = /\b(?:FROM|JOIN)\s+([\w.]+)\s+(?:AS\s+)?([A-Za-z_][\w$]*)/gi;
+          let m: RegExpExecArray | null;
+          while ((m = re.exec(fullText)) !== null) {
+            const tableRef = m[1].toUpperCase();
+            const alias = m[2].toUpperCase();
+            const baseName = tableRef.split(".").pop() ?? tableRef;
+            const hit = catalog.find((t) => t.table.toUpperCase() === baseName);
+            if (hit) aliasMap.set(alias, hit.table);
+          }
+        } catch {
+          // ignore
+        }
+
+        // 检查光标前是否是 alias.<word> 的字段引用
+        const lineText = model.getLineContent(position.lineNumber);
+        const beforeWord = lineText.slice(0, wordAt.startColumn - 1);
+        const aliasMatch = /([A-Za-z_][\w$]*)\.\s*$/.exec(beforeWord);
+        if (aliasMatch) {
+          const aliasU = aliasMatch[1].toUpperCase();
+          const tableKey = aliasMap.get(aliasU);
+          const table = tableKey ? catalog.find((t) => t.table === tableKey) : undefined;
+          if (table && table.fields.some((f) => f.toUpperCase() === wordU)) {
+            const fieldName = table.fields.find((f) => f.toUpperCase() === wordU)!;
+            return {
+              range,
+              contents: [{ value: fieldMarkdown(table, fieldName) }],
+            };
+          }
+        }
+
+        // 检查是否是表名 / 限定名 / 别名
+        const tableKey = aliasMap.get(wordU);
+        if (tableKey) {
+          const table = catalog.find((t) => t.table === tableKey);
+          if (table) {
+            return {
+              range,
+              contents: [{ value: tableMarkdown(table) }],
+            };
+          }
+        }
+
+        // 裸字段名：列出所有含此字段的表
+        const matches = catalog.filter((t) =>
+          t.fields.some((f) => f.toUpperCase() === wordU),
+        );
+        if (matches.length > 0) {
+          if (matches.length === 1 && matches[0]) {
+            const t = matches[0];
+            const fieldName = t.fields.find((f) => f.toUpperCase() === wordU)!;
+            return { range, contents: [{ value: fieldMarkdown(t, fieldName) }] };
+          }
+          // 多张表都有该字段：每张一条
+          const blocks = matches.slice(0, 8).map((t) => {
+            const fieldName = t.fields.find((f) => f.toUpperCase() === wordU)!;
+            return { value: fieldMarkdown(t, fieldName) };
+          });
+          if (matches.length > 8) {
+            blocks.push({
+              value: `_…还有 ${matches.length - 8} 张表含 \`${word}\` 字段_`,
+            });
+          }
+          return { range, contents: blocks };
+        }
+
+        return null;
+      },
+    });
+    return () => provider.dispose();
+  }, [monacoReadyTick, config.tableCatalog]);
+
   // 硬换行：监听输入，超过行长后自动插入真实换行符
   useEffect(() => {
     const ed = editorRef.current;

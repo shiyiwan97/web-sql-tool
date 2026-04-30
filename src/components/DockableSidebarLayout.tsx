@@ -17,8 +17,6 @@ type Props = {
   renderPanel: (slot: PanelSlot) => ReactNode;
   /** 右键面板标题栏：宿主可决定是否打开样式 modal 等 */
   onTitleContextMenu?: (slot: PanelSlot, e: React.MouseEvent) => void;
-  /** 点击标题栏右侧工具图标时触发（左键） */
-  onTitleStyleClick?: (slot: PanelSlot) => void;
 };
 
 const PANEL_LABEL: Record<PanelSlot, string> = {
@@ -36,7 +34,6 @@ export function DockableSidebarColumn({
   setConfig,
   renderPanel,
   onTitleContextMenu,
-  onTitleStyleClick,
 }: Props) {
   const slots =
     side === "left" ? config.sidebarLayout.left : config.sidebarLayout.right;
@@ -208,39 +205,7 @@ export function DockableSidebarColumn({
                 <span aria-hidden style={{ letterSpacing: "-0.12em" }}>
                   ⠿
                 </span>
-                <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-                  {PANEL_LABEL[slot]}
-                </span>
-                {onTitleStyleClick ? (
-                  <button
-                    type="button"
-                    title="面板样式设置"
-                    aria-label="面板样式设置"
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onTitleStyleClick(slot);
-                    }}
-                    style={{
-                      flexShrink: 0,
-                      width: 22,
-                      height: 22,
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      padding: 0,
-                      borderRadius: 4,
-                      border: "1px solid var(--border)",
-                      background: "var(--bg-app)",
-                      color: "var(--text-muted)",
-                      cursor: "pointer",
-                      fontSize: 12,
-                      lineHeight: 1,
-                    }}
-                  >
-                    ⚙
-                  </button>
-                ) : null}
+                {PANEL_LABEL[slot]}
               </div>
               <div
                 style={{
