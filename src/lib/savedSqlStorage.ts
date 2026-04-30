@@ -3,6 +3,8 @@ export type SavedSqlSlot = {
   name: string;
   sql: string;
   updatedAt: string;
+  /** 自定义背景色（hex 或 ""），右键菜单可改 */
+  bgColor?: string;
 };
 
 const KEY = "sql-web-tool-saved-sql-v1";
@@ -20,6 +22,7 @@ export function loadSavedSqlSlots(): SavedSqlSlot[] {
         name: String(o.name ?? `存档 ${i + 1}`),
         sql: String(o.sql ?? ""),
         updatedAt: String(o.updatedAt ?? new Date().toISOString()),
+        bgColor: typeof o.bgColor === "string" ? o.bgColor : undefined,
       };
     });
   } catch {

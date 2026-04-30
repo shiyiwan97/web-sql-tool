@@ -56,6 +56,8 @@ export interface TableCatalogEntry {
   table: string;
   /** Optional qualified name for SQL snippets */
   qualifiedName?: string;
+  /** 表级注释 / remark（来自 CSV 第 2 列） */
+  comment?: string;
   fields: string[];
   /** Primary key fields (best-effort from DDS) */
   primaryKeys?: string[];
@@ -126,6 +128,102 @@ export interface HotkeyConfig {
   compressLineOrSelection: string;
   /** 压缩当前分号块，如 Ctrl+Shift+Backspace */
   compressCurrentBlock: string;
+  /** 打开设置面板，例如 Ctrl+Alt+, */
+  openSettings: string;
+}
+
+/**
+ * 文本样式（仅作用于颜色与字号；空字符串/0 表示沿用主题/默认）
+ */
+export interface PanelTextStyle {
+  fontSize: number;
+  /** 16 进制色 "#rrggbb"；"" 表示沿用主题色 */
+  color: string;
+}
+
+/**
+ * 输入/按钮的盒子样式
+ *  - width/height 为 0 表示自动（不强制）
+ *  - label 仅对按钮有效
+ */
+export interface PanelBoxStyle {
+  fontSize: number;
+  color: string;
+  width: number;
+  height: number;
+}
+
+export interface PanelButtonStyle extends PanelBoxStyle {
+  label: string;
+}
+
+/** 搜索面板：5 类文字 */
+export interface SearchPanelStyle {
+  tableName: PanelTextStyle;
+  fieldName: PanelTextStyle;
+  tableComment: PanelTextStyle;
+  fieldComment: PanelTextStyle;
+  fieldType: PanelTextStyle;
+  /** 字段类型映射：例如 { CHARACTER: "C", DECIMAL: "D" } */
+  typeMappings: Array<{ from: string; to: string }>;
+  /** 表 item 行高（px，0 = 自动） */
+  tableItemHeight: number;
+  /** 字段 item 行高（px，0 = 自动） */
+  fieldItemHeight: number;
+  /** 注释/描述是否换行展示（false = 单行省略） */
+  commentWrap: boolean;
+}
+
+/** 快捷赋值面板：3 个输入框 + 3 个按钮 */
+export interface QuickInsertPanelStyle {
+  keyInput: PanelBoxStyle;
+  valueInput: PanelBoxStyle;
+  shortcutInput: PanelBoxStyle;
+  bindButton: PanelButtonStyle;
+  deleteButton: PanelButtonStyle;
+  addButton: PanelButtonStyle;
+  /** 当行有富余空间时，由这个目标输入框吸收（none = 不扩展） */
+  expandTarget: "key" | "value" | "shortcut" | "none";
+}
+
+/** 已存 SQL 面板：1 个输入 + 3 个按钮 + 行背景 */
+export interface SavedSqlPanelStyle {
+  /** 行（item）默认背景色 */
+  rowBackground: string;
+  nameInput: PanelBoxStyle;
+  showButton: PanelButtonStyle;
+  useButton: PanelButtonStyle;
+  deleteButton: PanelButtonStyle;
+  /** 当行有富余空间时，由这个目标吸收 */
+  expandTarget: "name" | "show" | "use" | "delete" | "none";
+}
+
+/** 表配置查看：与搜索一致的 5 类文字（不含 typeMappings/heights/wrap，只复用文字部分） */
+export interface TableCatalogPanelStyle {
+  tableName: PanelTextStyle;
+  fieldName: PanelTextStyle;
+  tableComment: PanelTextStyle;
+  fieldComment: PanelTextStyle;
+  fieldType: PanelTextStyle;
+}
+
+export interface PanelStyles {
+  search: SearchPanelStyle;
+  quickInsert: QuickInsertPanelStyle;
+  savedSql: SavedSqlPanelStyle;
+  tableCatalog: TableCatalogPanelStyle;
+}
+
+/** 编辑器（Monaco）外观设置 */
+export interface EditorAppearance {
+  /** 基础主题；空字符串/"auto" 时跟随 AppConfig.theme（dark→vs-dark, light→vs） */
+  baseTheme: "auto" | "vs" | "vs-dark" | "hc-black" | "hc-light";
+  /** 当前光标行的高亮背景色；"" 表示沿用主题默认 */
+  selectedLineBg: string;
+  /** 当前光标行的行号颜色（active line number）；"" 表示沿用主题默认 */
+  activeLineNumberFg: string;
+  /** 普通行的行号颜色；"" 表示沿用主题默认 */
+  lineNumberFg: string;
 }
 
 export interface AppConfig {
@@ -148,4 +246,8 @@ export interface AppConfig {
   sidebarLayout: SidebarLayout;
   quickInserts: QuickInsertEntry[];
   hotkeys: HotkeyConfig;
+  /** 各面板的字体/颜色/盒子尺寸自定义；为空时使用默认 */
+  panelStyles: PanelStyles;
+  /** 编辑器（Monaco）外观自定义 */
+  editorAppearance: EditorAppearance;
 }

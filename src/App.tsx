@@ -13,9 +13,20 @@ import { SavedSqlPanel } from "./components/SavedSqlPanel";
 import { HotkeysSettingsModal } from "./components/HotkeysSettingsModal";
 import { CommandMenuModal } from "./components/CommandMenuModal";
 import { RelationsModal } from "./components/RelationsModal";
+import { TableCatalogModal } from "./components/TableCatalogModal";
+import { ConfigDiffModal } from "./components/ConfigDiffModal";
+import { PanelStyleModal, type PanelStyleTarget } from "./components/PanelStyleModal";
 import type { AppConfig, PanelSlot, SqlCompressLevel } from "./types";
 import { loadConfigBundle, saveConfigBundle } from "./lib/storage";
 import { resolveConfig, type ConfigBundle, normalizeBundle } from "./lib/configBundle";
+import {
+  CONFIG_BLOCK_KEYS,
+  bumpBlockVersion,
+  loadBlocksMeta,
+  saveBlocksMeta,
+  type ConfigBlockKey,
+  type ConfigBlocksMeta,
+} from "./lib/configBlocks";
 import {
   applySqlFormatting,
   extractAliasedTables,
@@ -72,6 +83,10 @@ export default function App() {
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const [commandMenuOpen, setCommandMenuOpen] = useState(false);
   const [relationsOpen, setRelationsOpen] = useState(false);
+  const [tableCatalogOpen, setTableCatalogOpen] = useState(false);
+  const [configDiffOpen, setConfigDiffOpen] = useState(false);
+  const [blocksMeta, setBlocksMeta] = useState<ConfigBlocksMeta>(loadBlocksMeta);
+  const [panelStyleTarget, setPanelStyleTarget] = useState<PanelStyleTarget | null>(null);
   const [savedSqlSlots, setSavedSqlSlots] = useState<SavedSqlSlot[]>(loadSavedSqlSlots);
   const [savedSqlSelectedId, setSavedSqlSelectedId] = useState<string>(
     () => loadSavedSqlSlots()[0]?.id ?? "",
@@ -94,6 +109,10 @@ export default function App() {
   useEffect(() => {
     saveConfigBundle(bundle);
   }, [bundle]);
+
+  useEffect(() => {
+    saveBlocksMeta(blocksMeta);
+  }, [blocksMeta]);
 
   useEffect(() => {
     persistSavedSqlSlots(savedSqlSlots);
@@ -157,9 +176,20 @@ export default function App() {
 
   const patchConfig = useCallback((fn: (c: AppConfig) => AppConfig) => {
     setBundle((b) => {
-      const nextPrivate = fn(resolveConfig(b));
+      const prevPrivate = resolveConfig(b);
+      const nextPrivate = fn(prevPrivate);
       const next = { ...b, privateConfig: nextPrivate };
       setConfig(resolveConfig(next));
+      // Bump block versions for changed top-level blocks
+      setBlocksMeta((meta) => {
+        let m = meta;
+        for (const k of CONFIG_BLOCK_KEYS) {
+          const a = JSON.stringify((prevPrivate as any)[k]);
+          const z = JSON.stringify((nextPrivate as any)[k]);
+          if (a !== z) m = bumpBlockVersion(m, k as ConfigBlockKey);
+        }
+        return m;
+      });
       return next;
     });
   }, []);
@@ -190,7 +220,23 @@ export default function App() {
   }, []);
 
   const onExportConfig = useCallback(() => {
-    const blob = new Blob([JSON.stringify(bundle, null, 2)], {
+    // Export as portable JSON (with userId + per-block version meta) for sharing.
+    const portable = {
+      schemaVersion: 1 as const,
+      userId: (function () {
+        try {
+          return localStorage.getItem("sql-web-tool-user-id") || "";
+        } catch {
+          return "";
+        }
+      })(),
+      generatedAt: new Date().toISOString(),
+      blocksMeta,
+      config,
+      // Keep raw bundle alongside for full back-compat round-trip.
+      _bundle: bundle,
+    };
+    const blob = new Blob([JSON.stringify(portable, null, 2)], {
       type: "application/json;charset=utf-8",
     });
     const a = document.createElement("a");
@@ -198,7 +244,7 @@ export default function App() {
     a.download = "sql-web-tool-config.json";
     a.click();
     URL.revokeObjectURL(a.href);
-  }, [bundle]);
+  }, [bundle, config, blocksMeta]);
 
   const onImportFile = useCallback((file: File | null) => {
     if (!file) return;
@@ -206,15 +252,29 @@ export default function App() {
     reader.onload = () => {
       try {
         const parsed = JSON.parse(String(reader.result));
-        // Accept either a bundle or a single config (treated as privateConfig)
-        const maybeBundle = normalizeBundle(parsed);
+        const o = parsed as Record<string, unknown>;
+        // Portable file: { schemaVersion: 1, config, blocksMeta, _bundle? }
+        if (o && o.schemaVersion === 1 && o.config) {
+          if (o._bundle) {
+            const nb = normalizeBundle(o._bundle);
+            setBundle(nb);
+            setConfig(resolveConfig(nb));
+          } else {
+            patchConfig(() => normalizeConfig(o.config));
+          }
+          if (o.blocksMeta && typeof o.blocksMeta === "object") {
+            setBlocksMeta((m) => ({ ...m, ...(o.blocksMeta as Partial<ConfigBlocksMeta>) }));
+          }
+          return;
+        }
+        // Bundle file
         const isBundleLike =
           parsed &&
           typeof parsed === "object" &&
           "publicConfig" in (parsed as any) &&
           "privateConfig" in (parsed as any);
         const nextBundle = isBundleLike
-          ? maybeBundle
+          ? normalizeBundle(parsed)
           : { ...bundle, privateConfig: normalizeConfig(parsed) };
         setBundle(nextBundle);
         setConfig(resolveConfig(nextBundle));
@@ -223,7 +283,7 @@ export default function App() {
       }
     };
     reader.readAsText(file, "UTF-8");
-  }, [bundle]);
+  }, [bundle, patchConfig]);
 
   const getCopyBlockText = useCallback(() => {
     const ed = editorRef.current;
@@ -317,7 +377,7 @@ export default function App() {
   const updateSavedSlot = useCallback(
     (
       id: string,
-      patch: Partial<Pick<SavedSqlSlot, "name" | "sql">>,
+      patch: Partial<Pick<SavedSqlSlot, "name" | "sql" | "bgColor">>,
     ) => {
       setSavedSqlSlots((slots) =>
         slots.map((s) =>
@@ -342,6 +402,183 @@ export default function App() {
     return installMonacoFindWidgetWorkaround(root);
   }, [monacoReadyTick]);
 
+  // 应用编辑器外观（自定义主题：基础主题 + 选中行/活动行号颜色覆盖）
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    const ed = editorRef.current;
+    if (!monaco || !ed || monacoReadyTick === 0) return;
+    const ea = config.editorAppearance;
+    let base: "vs" | "vs-dark" | "hc-black" | "hc-light";
+    if (ea.baseTheme === "auto" || !ea.baseTheme) {
+      base = config.theme === "light" ? "vs" : "vs-dark";
+    } else {
+      base = ea.baseTheme;
+    }
+    const colors: Record<string, string> = {};
+    if (ea.selectedLineBg) colors["editor.lineHighlightBackground"] = ea.selectedLineBg;
+    if (ea.activeLineNumberFg) colors["editorLineNumber.activeForeground"] = ea.activeLineNumberFg;
+    if (ea.lineNumberFg) colors["editorLineNumber.foreground"] = ea.lineNumberFg;
+    if (Object.keys(colors).length === 0) {
+      monaco.editor.setTheme(base);
+      return;
+    }
+    try {
+      monaco.editor.defineTheme("sql-tool-custom", {
+        base,
+        inherit: true,
+        rules: [],
+        colors,
+      });
+      monaco.editor.setTheme("sql-tool-custom");
+    } catch {
+      monaco.editor.setTheme(base);
+    }
+  }, [
+    monacoReadyTick,
+    config.editorAppearance.baseTheme,
+    config.editorAppearance.selectedLineBg,
+    config.editorAppearance.activeLineNumberFg,
+    config.editorAppearance.lineNumberFg,
+    config.theme,
+  ]);
+
+  // 全局快捷键：openSettings（在编辑器外/内均生效）
+  useEffect(() => {
+    const target = config.hotkeys.openSettings || "";
+    if (!target) return;
+    // 解析形如 "Ctrl+Alt+,", "Shift+F1" 这样的字符串
+    const parts = target.split("+").map((s) => s.trim()).filter(Boolean);
+    const want = {
+      ctrl: parts.some((p) => /^ctrl|control$/i.test(p)),
+      alt: parts.some((p) => /^alt$/i.test(p)),
+      shift: parts.some((p) => /^shift$/i.test(p)),
+      meta: parts.some((p) => /^meta|cmd|command$/i.test(p)),
+      key: parts.find((p) => !/^(ctrl|control|alt|shift|meta|cmd|command)$/i.test(p)) ?? "",
+    };
+    if (!want.key) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey !== want.ctrl) return;
+      if (e.altKey !== want.alt) return;
+      if (e.shiftKey !== want.shift) return;
+      if (e.metaKey !== want.meta) return;
+      const k = want.key.toLowerCase();
+      const hit =
+        e.key.toLowerCase() === k ||
+        (k.length === 1 && e.key === k) ||
+        (k === "," && e.key === ",") ||
+        (k === "." && e.key === ".") ||
+        (k.startsWith("f") && e.key.toLowerCase() === k);
+      if (!hit) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setSettingsOpen(true);
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [config.hotkeys.openSettings]);
+
+  // 智能提示：根据 tableCatalog 注册表名 / 字段补全
+  useEffect(() => {
+    const monaco = monacoRef.current;
+    if (!monaco || monacoReadyTick === 0) return;
+    const provider = monaco.languages.registerCompletionItemProvider("sql", {
+      triggerCharacters: [".", " "],
+      provideCompletionItems: (model, position) => {
+        const word = model.getWordUntilPosition(position);
+        const range: Monaco.IRange = {
+          startLineNumber: position.lineNumber,
+          endLineNumber: position.lineNumber,
+          startColumn: word.startColumn,
+          endColumn: word.endColumn,
+        };
+        // 检测点号：alias.<cursor> → 仅返回该表/别名的字段
+        const lineText = model.getLineContent(position.lineNumber);
+        const before = lineText.slice(0, position.column - 1);
+        const dotMatch = /([A-Za-z_][\w$]*)\.\s*([\w$]*)$/.exec(before);
+        const catalog = configRef.current.tableCatalog;
+        const aliasMap = new Map<string, string>(); // alias / table → table key
+        for (const t of catalog) {
+          aliasMap.set(t.table.toUpperCase(), t.table);
+          if (t.qualifiedName) aliasMap.set(t.qualifiedName.toUpperCase(), t.table);
+        }
+        // 解析当前文档中出现的别名（FROM/JOIN <table> <alias>）
+        try {
+          const fullText = model.getValue();
+          const re = /\b(?:FROM|JOIN)\s+([\w.]+)\s+(?:AS\s+)?([A-Za-z_][\w$]*)/gi;
+          let m: RegExpExecArray | null;
+          while ((m = re.exec(fullText)) !== null) {
+            const tableRef = m[1].toUpperCase();
+            const alias = m[2].toUpperCase();
+            const baseName = tableRef.split(".").pop() ?? tableRef;
+            const hit = catalog.find((t) => t.table.toUpperCase() === baseName);
+            if (hit) aliasMap.set(alias, hit.table);
+          }
+        } catch {
+          // ignore
+        }
+
+        if (dotMatch) {
+          const alias = dotMatch[1].toUpperCase();
+          const base = aliasMap.get(alias);
+          const table = base ? catalog.find((t) => t.table === base) : undefined;
+          if (table) {
+            const suggestions: Monaco.languages.CompletionItem[] = table.fields.map((f) => {
+              const info = table.fieldInfo?.[f.toUpperCase()];
+              const detail = info?.type
+                ? `${info.type}${info.length != null ? `(${info.length}${info.precision ? "," + info.precision : ""})` : ""}`
+                : table.table;
+              return {
+                label: f,
+                kind: monaco.languages.CompletionItemKind.Field,
+                insertText: f,
+                range,
+                detail,
+                documentation: info?.comment ?? table.comment ?? "",
+                sortText: info?.isKey ? `0_${f}` : `1_${f}`,
+              };
+            });
+            return { suggestions };
+          }
+          return { suggestions: [] };
+        }
+
+        // 否则：返回所有表名 + 所有字段（粗筛，最多 200 个字段以免过载）
+        const tables: Monaco.languages.CompletionItem[] = catalog.map((t) => ({
+          label: t.qualifiedName ?? t.table,
+          kind: monaco.languages.CompletionItemKind.Class,
+          insertText: t.qualifiedName ?? t.table,
+          range,
+          detail: `表 · ${t.fields.length} 字段`,
+          documentation: t.comment ?? "",
+          sortText: `0_${t.table}`,
+        }));
+        const fields: Monaco.languages.CompletionItem[] = [];
+        const seen = new Set<string>();
+        for (const t of catalog) {
+          for (const f of t.fields) {
+            const key = f.toUpperCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const info = t.fieldInfo?.[key];
+            fields.push({
+              label: f,
+              kind: monaco.languages.CompletionItemKind.Field,
+              insertText: f,
+              range,
+              detail: `${t.table}${info?.type ? ` · ${info.type}` : ""}`,
+              documentation: info?.comment ?? "",
+              sortText: `1_${f}`,
+            });
+            if (fields.length >= 200) break;
+          }
+          if (fields.length >= 200) break;
+        }
+        return { suggestions: [...tables, ...fields] };
+      },
+    });
+    return () => provider.dispose();
+  }, [monacoReadyTick, config.tableCatalog]);
+
   // 硬换行：监听输入，超过行长后自动插入真实换行符
   useEffect(() => {
     const ed = editorRef.current;
@@ -357,24 +594,33 @@ export default function App() {
       if (e.changes.length !== 1) return;
       const ch = e.changes[0];
       if (!ch) return;
-      // 只处理“插入少量字符”的场景（键入）
-      if (ch.text.length === 0) return; // 删除
-      if (ch.text.length > 2) return; // 粘贴/多字符输入
-      if (ch.text.includes("\n") || ch.text.includes("\r")) return;
+      // 处理两类典型场景：
+      //   1) 单字符键入（含空格）；text 长度小且不含换行
+      //   2) 删除（含删除换行把下一行并到上一行）；text 为空
+      const isInsert = ch.text.length > 0;
+      if (isInsert) {
+        if (ch.text.length > 2) return; // 粘贴/多字符输入
+        if (ch.text.includes("\n") || ch.text.includes("\r")) return;
+      }
+      // 删除场景下，rangeLength 必须 > 0（确实有删除内容）
+      if (!isInsert && (ch.rangeLength ?? 0) === 0) return;
 
       const model = ed.getModel();
       const pos = ed.getPosition();
       if (!model || !pos) return;
 
-      // 以本次变更所在行为准（行内插入空格也可能导致超长）
+      // 以本次变更所在行（或合并后的当前行）为准
       const lineNumber = ch.range.startLineNumber ?? pos.lineNumber;
       const line = model.getLineContent(lineNumber);
       // Monaco column 从 1 开始；line.length 是字符数
       if (line.length <= maxLen) return;
 
-      // 只在“本次变更发生在边界前/边界处”或“光标已过边界”时触发自动断行
-      const changeCol = ch.range.startColumn ?? pos.column;
-      if (changeCol > maxLen + 1 && pos.column <= maxLen) return;
+      // 插入场景：仅在“变更点在边界附近”时触发，避免历史长行被反复重排
+      if (isInsert) {
+        const changeCol = ch.range.startColumn ?? pos.column;
+        if (changeCol > maxLen + 1 && pos.column <= maxLen) return;
+      }
+      // 删除场景：直接对超长行做断行（典型：删除换行把下一行提上来）
 
       const before = line.slice(0, maxLen);
       let cut = before.lastIndexOf(" ");
@@ -619,6 +865,19 @@ export default function App() {
         }),
       );
     }
+
+    // Shift+Enter：在当前行下方插入一个新空行并把光标移过去
+    disposables.push(
+      editor.addAction({
+        id: "sql-tool-insert-line-below",
+        label: "在下方插入一行",
+        keybindings: [monaco.KeyMod.Shift | monaco.KeyCode.Enter],
+        run: (ed) => {
+          ed.trigger("keyboard", "editor.action.insertLineAfter", null);
+        },
+      }),
+    );
+
     return () => {
       disposables.forEach((d) => d.dispose());
     };
@@ -636,11 +895,24 @@ export default function App() {
       return (
         <SavedSqlPanel
           slots={savedSqlSlots}
+          config={config}
           activeSlotId={savedSqlSelectedId}
           onSelectActive={setSavedSqlSelectedId}
           onUpdateSlot={updateSavedSlot}
           onPushToEditor={pushSlotIntoCurrentBlock}
           onDeleteSlot={deleteSavedSlot}
+          onReorder={(id, targetIndex) =>
+            setSavedSqlSlots((arr) => {
+              const idx = arr.findIndex((s) => s.id === id);
+              if (idx < 0) return arr;
+              const next = arr.slice();
+              const [item] = next.splice(idx, 1);
+              if (!item) return arr;
+              const insertAt = Math.max(0, Math.min(targetIndex > idx ? targetIndex - 1 : targetIndex, next.length));
+              next.splice(insertAt, 0, item);
+              return next;
+            })
+          }
         />
       );
     }
@@ -715,6 +987,8 @@ export default function App() {
         onExportConfig={onExportConfig}
         onOpenHotkeys={() => setHotkeysOpen(true)}
         onOpenRelations={() => setRelationsOpen(true)}
+        onOpenTableCatalog={() => setTableCatalogOpen(true)}
+        onOpenConfigDiff={() => setConfigDiffOpen(true)}
       />
 
       <header
@@ -758,7 +1032,7 @@ export default function App() {
             onChange={(e) => {
               const v = Number(e.target.value);
               const level = (v === 2 ? 2 : v === 1 ? 1 : 0) as SqlCompressLevel;
-              setConfig((c) => ({
+              patchConfig((c) => ({
                 ...c,
                 sqlFormatting: { ...c.sqlFormatting, compressLevel: level },
               }));
@@ -813,6 +1087,11 @@ export default function App() {
           config={config}
           setConfig={patchConfig}
           renderPanel={renderPanel}
+          onTitleStyleClick={(slot) => {
+            if (slot === "search") setPanelStyleTarget("search");
+            else if (slot === "quickInsert") setPanelStyleTarget("quickInsert");
+            else if (slot === "savedSql") setPanelStyleTarget("savedSql");
+          }}
         />
         <SidebarWidthHandle
           ariaLabel="拖动改变左侧栏宽度"
@@ -857,7 +1136,6 @@ export default function App() {
             <Editor
               height="100%"
               language="sql"
-              theme={config.theme === "light" ? "light" : "vs-dark"}
               value={sql}
               onChange={(v) => setSql(v ?? "")}
               onMount={(editor, monaco) => {
@@ -909,6 +1187,11 @@ export default function App() {
           config={config}
           setConfig={patchConfig}
           renderPanel={renderPanel}
+          onTitleStyleClick={(slot) => {
+            if (slot === "search") setPanelStyleTarget("search");
+            else if (slot === "quickInsert") setPanelStyleTarget("quickInsert");
+            else if (slot === "savedSql") setPanelStyleTarget("savedSql");
+          }}
         />
       </div>
 
@@ -928,16 +1211,17 @@ export default function App() {
         open={settingsOpen}
         config={config}
         onClose={() => setSettingsOpen(false)}
-        onApply={(c) => setConfig(c)}
+        onApply={(c) => patchConfig(() => c)}
         focusJsonTick={jsonFocusTick}
       />
 
       <HotkeysSettingsModal
         open={hotkeysOpen}
         hotkeys={config.hotkeys}
+        quickInserts={config.quickInserts}
         onClose={() => setHotkeysOpen(false)}
         onApply={(next) =>
-          setConfig((c) => ({ ...c, hotkeys: { ...c.hotkeys, ...next } }))
+          patchConfig((c) => ({ ...c, hotkeys: { ...c.hotkeys, ...next } }))
         }
       />
 
@@ -965,6 +1249,36 @@ export default function App() {
         setConfig={patchConfig}
         onClose={() => setRelationsOpen(false)}
       />
+
+      <TableCatalogModal
+        open={tableCatalogOpen}
+        config={config}
+        onClose={() => setTableCatalogOpen(false)}
+        onOpenStyle={() => setPanelStyleTarget("tableCatalog")}
+      />
+
+      <ConfigDiffModal
+        open={configDiffOpen}
+        config={config}
+        blocksMeta={blocksMeta}
+        onClose={() => setConfigDiffOpen(false)}
+        onApplyBlock={(key, value) => {
+          patchConfig((c) => ({ ...c, [key]: value as any }));
+        }}
+        onApplyAll={(incoming) => {
+          patchConfig(() => incoming);
+        }}
+      />
+
+      {panelStyleTarget ? (
+        <PanelStyleModal
+          open
+          target={panelStyleTarget}
+          config={config}
+          onClose={() => setPanelStyleTarget(null)}
+          onApply={(next) => patchConfig((c) => ({ ...c, panelStyles: next }))}
+        />
+      ) : null}
     </div>
   );
 }

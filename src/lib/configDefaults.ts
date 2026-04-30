@@ -1,9 +1,18 @@
 import type {
   AppConfig,
+  EditorAppearance,
   HotkeyConfig,
+  PanelBoxStyle,
+  PanelButtonStyle,
+  PanelStyles,
+  PanelTextStyle,
   QuickInsertEntry,
+  QuickInsertPanelStyle,
+  SavedSqlPanelStyle,
+  SearchPanelStyle,
   SidebarLayout,
   SqlCompressLevel,
+  TableCatalogPanelStyle,
 } from "../types";
 
 let id = 0;
@@ -87,8 +96,77 @@ export function createDefaultConfig(): AppConfig {
       saveEditorSql: "Ctrl+Alt+S",
       compressLineOrSelection: "Shift+Backspace",
       compressCurrentBlock: "Ctrl+Shift+Backspace",
+      openSettings: "Ctrl+Alt+,",
     },
+    panelStyles: createDefaultPanelStyles(),
+    editorAppearance: createDefaultEditorAppearance(),
   };
+}
+
+export function createDefaultEditorAppearance(): EditorAppearance {
+  return {
+    baseTheme: "auto",
+    selectedLineBg: "",
+    activeLineNumberFg: "",
+    lineNumberFg: "",
+  };
+}
+
+export function createDefaultPanelStyles(): PanelStyles {
+  const text = (size: number, color: string): PanelTextStyle => ({ fontSize: size, color });
+  const box = (size: number, color: string, w = 0, h = 0): PanelBoxStyle => ({
+    fontSize: size,
+    color,
+    width: w,
+    height: h,
+  });
+  const btn = (label: string, size: number, color: string, w = 0, h = 0): PanelButtonStyle => ({
+    label,
+    fontSize: size,
+    color,
+    width: w,
+    height: h,
+  });
+  const search: SearchPanelStyle = {
+    tableName: text(12, "#93c5fd"),
+    fieldName: text(11, "#a7f3d0"),
+    tableComment: text(11, ""),
+    fieldComment: text(11, ""),
+    fieldType: text(10, ""),
+    typeMappings: [
+      { from: "CHARACTER", to: "C" },
+      { from: "VARCHAR", to: "VC" },
+      { from: "DECIMAL", to: "D" },
+    ],
+    tableItemHeight: 0,
+    fieldItemHeight: 0,
+    commentWrap: false,
+  };
+  const tableCatalog: TableCatalogPanelStyle = {
+    tableName: text(13, ""),
+    fieldName: text(12, "#a7f3d0"),
+    tableComment: text(12, ""),
+    fieldComment: text(12, ""),
+    fieldType: text(12, ""),
+  };
+  const quickInsert: QuickInsertPanelStyle = {
+    keyInput: box(11, "", 0, 0),
+    valueInput: box(11, "", 0, 0),
+    shortcutInput: box(11, "", 0, 0),
+    bindButton: btn("绑定…", 11, "", 0, 0),
+    deleteButton: btn("×", 14, "", 28, 0),
+    addButton: btn("+ 添加一行", 11, "", 0, 0),
+    expandTarget: "value",
+  };
+  const savedSql: SavedSqlPanelStyle = {
+    rowBackground: "",
+    nameInput: box(11, "", 0, 0),
+    showButton: btn("展示", 11, "", 0, 0),
+    useButton: btn("使用", 11, "", 0, 0),
+    deleteButton: btn("×", 14, "", 28, 0),
+    expandTarget: "name",
+  };
+  return { search, tableCatalog, quickInsert, savedSql };
 }
 
 export function normalizeConfig(raw: unknown): AppConfig {
@@ -157,6 +235,7 @@ export function normalizeConfig(raw: unknown): AppConfig {
           qualifiedName: t.qualifiedName
             ? String(t.qualifiedName)
             : undefined,
+          comment: typeof t.comment === "string" ? t.comment : undefined,
           fields: Array.isArray(t.fields)
             ? t.fields.map((f) => String(f).toUpperCase())
             : [],
@@ -169,9 +248,122 @@ export function normalizeConfig(raw: unknown): AppConfig {
     sidebarLayout: normalizeSidebarLayout(o.sidebarLayout, base.sidebarLayout),
     quickInserts: normalizeQuickInserts(o.quickInserts, base.quickInserts),
     hotkeys: normalizeHotkeys(o.hotkeys, base.hotkeys),
+    panelStyles: normalizePanelStyles(o.panelStyles, base.panelStyles),
+    editorAppearance: normalizeEditorAppearance(o.editorAppearance, base.editorAppearance),
   };
   return merged;
 }
+
+function normalizeText(raw: unknown, fb: PanelTextStyle): PanelTextStyle {
+  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  return {
+    fontSize: typeof o.fontSize === "number" && o.fontSize > 0 ? o.fontSize : fb.fontSize,
+    color: typeof o.color === "string" ? o.color : fb.color,
+  };
+}
+function normalizeBox(raw: unknown, fb: PanelBoxStyle): PanelBoxStyle {
+  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  return {
+    fontSize: typeof o.fontSize === "number" && o.fontSize > 0 ? o.fontSize : fb.fontSize,
+    color: typeof o.color === "string" ? o.color : fb.color,
+    width: typeof o.width === "number" ? Math.max(0, o.width) : fb.width,
+    height: typeof o.height === "number" ? Math.max(0, o.height) : fb.height,
+  };
+}
+function normalizeBtn(raw: unknown, fb: PanelButtonStyle): PanelButtonStyle {
+  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  return {
+    ...normalizeBox(raw, fb),
+    label: typeof o.label === "string" ? o.label : fb.label,
+  };
+}
+
+function normalizeTypeMappings(raw: unknown, fb: SearchPanelStyle["typeMappings"]) {
+  if (!Array.isArray(raw)) return [...fb];
+  return raw
+    .map((r) => {
+      const o = (r ?? {}) as Record<string, unknown>;
+      return {
+        from: String(o.from ?? "").trim().toUpperCase(),
+        to: String(o.to ?? "").trim(),
+      };
+    })
+    .filter((x) => x.from.length > 0);
+}
+
+function normalizePanelStyles(raw: unknown, fb: PanelStyles): PanelStyles {
+  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, any>;
+  const s = (o.search ?? {}) as Record<string, any>;
+  const tc = (o.tableCatalog ?? {}) as Record<string, any>;
+  const qi = (o.quickInsert ?? {}) as Record<string, any>;
+  const sv = (o.savedSql ?? {}) as Record<string, any>;
+  const expandTarget = (v: unknown, allowed: string[], fb2: string) =>
+    typeof v === "string" && allowed.includes(v) ? (v as any) : fb2;
+  return {
+    search: {
+      tableName: normalizeText(s.tableName, fb.search.tableName),
+      fieldName: normalizeText(s.fieldName, fb.search.fieldName),
+      tableComment: normalizeText(s.tableComment, fb.search.tableComment),
+      fieldComment: normalizeText(s.fieldComment, fb.search.fieldComment),
+      fieldType: normalizeText(s.fieldType, fb.search.fieldType),
+      typeMappings: normalizeTypeMappings(s.typeMappings, fb.search.typeMappings),
+      tableItemHeight:
+        typeof s.tableItemHeight === "number" ? Math.max(0, s.tableItemHeight) : fb.search.tableItemHeight,
+      fieldItemHeight:
+        typeof s.fieldItemHeight === "number" ? Math.max(0, s.fieldItemHeight) : fb.search.fieldItemHeight,
+      commentWrap: typeof s.commentWrap === "boolean" ? s.commentWrap : fb.search.commentWrap,
+    },
+    tableCatalog: {
+      tableName: normalizeText(tc.tableName, fb.tableCatalog.tableName),
+      fieldName: normalizeText(tc.fieldName, fb.tableCatalog.fieldName),
+      tableComment: normalizeText(tc.tableComment, fb.tableCatalog.tableComment),
+      fieldComment: normalizeText(tc.fieldComment, fb.tableCatalog.fieldComment),
+      fieldType: normalizeText(tc.fieldType, fb.tableCatalog.fieldType),
+    },
+    quickInsert: {
+      keyInput: normalizeBox(qi.keyInput, fb.quickInsert.keyInput),
+      valueInput: normalizeBox(qi.valueInput, fb.quickInsert.valueInput),
+      shortcutInput: normalizeBox(qi.shortcutInput, fb.quickInsert.shortcutInput),
+      bindButton: normalizeBtn(qi.bindButton, fb.quickInsert.bindButton),
+      deleteButton: normalizeBtn(qi.deleteButton, fb.quickInsert.deleteButton),
+      addButton: normalizeBtn(qi.addButton, fb.quickInsert.addButton),
+      expandTarget: expandTarget(
+        qi.expandTarget,
+        ["key", "value", "shortcut", "none"],
+        fb.quickInsert.expandTarget,
+      ),
+    },
+    savedSql: {
+      rowBackground: typeof sv.rowBackground === "string" ? sv.rowBackground : fb.savedSql.rowBackground,
+      nameInput: normalizeBox(sv.nameInput, fb.savedSql.nameInput),
+      showButton: normalizeBtn(sv.showButton, fb.savedSql.showButton),
+      useButton: normalizeBtn(sv.useButton, fb.savedSql.useButton),
+      deleteButton: normalizeBtn(sv.deleteButton, fb.savedSql.deleteButton),
+      expandTarget: expandTarget(
+        sv.expandTarget,
+        ["name", "show", "use", "delete", "none"],
+        fb.savedSql.expandTarget,
+      ),
+    },
+  };
+}
+
+function normalizeEditorAppearance(raw: unknown, fb: EditorAppearance): EditorAppearance {
+  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const allowed = ["auto", "vs", "vs-dark", "hc-black", "hc-light"];
+  const baseTheme =
+    typeof o.baseTheme === "string" && allowed.includes(o.baseTheme as string)
+      ? (o.baseTheme as EditorAppearance["baseTheme"])
+      : fb.baseTheme;
+  return {
+    baseTheme,
+    selectedLineBg: typeof o.selectedLineBg === "string" ? o.selectedLineBg : fb.selectedLineBg,
+    activeLineNumberFg:
+      typeof o.activeLineNumberFg === "string" ? o.activeLineNumberFg : fb.activeLineNumberFg,
+    lineNumberFg: typeof o.lineNumberFg === "string" ? o.lineNumberFg : fb.lineNumberFg,
+  };
+}
+
 
 type TableRelationInput = {
   id?: string;
@@ -186,6 +378,7 @@ type TableRelationInput = {
 type TableCatalogInput = {
   table?: string;
   qualifiedName?: string;
+  comment?: string;
   fields?: string[];
   primaryKeys?: string[];
   fieldInfo?: Record<
@@ -362,6 +555,7 @@ function normalizeHotkeys(raw: unknown, fallback: HotkeyConfig): HotkeyConfig {
     compressCurrentBlock: String(
       h.compressCurrentBlock ?? fallback.compressCurrentBlock,
     ),
+    openSettings: String(h.openSettings ?? fallback.openSettings),
   };
 }
 

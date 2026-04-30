@@ -7,21 +7,22 @@
 ### CSV 列定义（按列顺序）
 
 1. **表名**：例如 `STUDENT`
-2. **列名**：例如 `STUID`
-3. **注释**：例如 `学生ID`（可为空）
-4. **类型**：例如 `CHAR` / `DECIMAL` / `VARCHAR`（可为空）
-5. **长度**：例如 `10`（可为空）
-6. **精度**：例如 `0` / `2`（可为空）
-7. **是否是key**：`1/y/yes/true/key` 视为主键；其它视为否
+2. **表注释（remark）**：例如 `学生信息表`（可为空，整张表共用，取该表第一条非空值）
+3. **列名**：例如 `STUID`
+4. **列注释**：例如 `学生ID`（可为空）
+5. **类型**：例如 `CHAR` / `DECIMAL` / `VARCHAR`（可为空）
+6. **长度**：例如 `10`（可为空）
+7. **精度**：例如 `0` / `2`（可为空）
+8. **是否是key**：`1/y/yes/true/key` 视为主键；其它视为否
 
 ### 例子
 
 ```csv
-表名,列名,注释,类型,长度,精度,是否是key
-STUDENT,STUID,学生ID,CHAR,10,,Y
-STUDENT,GCLSID,班级ID,CHAR,8,,N
-EXAMSCORE,STUID,学生ID,CHAR,10,,Y
-EXAMSCORE,EXAMDATE,考试日期,DECIMAL,8,0,Y
+表名,表注释,列名,列注释,类型,长度,精度,是否是key
+STUDENT,学生信息表,STUID,学生ID,CHAR,10,,Y
+STUDENT,,GCLSID,班级ID,CHAR,8,,N
+EXAMSCORE,考试成绩表,STUID,学生ID,CHAR,10,,Y
+EXAMSCORE,,EXAMDATE,考试日期,DECIMAL,8,0,Y
 ```
 
 ### 注意事项

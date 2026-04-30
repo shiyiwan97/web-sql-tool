@@ -8,6 +8,11 @@ import {
 } from "react";
 import { shortcutStringFromKeyboardEvent } from "../lib/shortcutFormat";
 
+export type ShortcutConflictEntry = {
+  label: string;
+  shortcut: string;
+};
+
 export type ShortcutCaptureModalProps = {
   open: boolean;
   title: string;
@@ -21,7 +26,27 @@ export type ShortcutCaptureModalProps = {
   confirmLabel?: string;
   /** 叠在其它弹窗之上时提高层级（默认 12000） */
   zIndex?: number;
+  /** 已占用的其它快捷键（用于冲突检测） */
+  existingShortcuts?: ShortcutConflictEntry[];
 };
+
+function normalizeShortcut(s: string): string {
+  return s
+    .split("+")
+    .map((p) => p.trim().toLowerCase())
+    .filter(Boolean)
+    .map((p) => (p === "control" ? "ctrl" : p === "cmd" || p === "command" ? "meta" : p))
+    .sort((a, b) => {
+      const order = ["ctrl", "alt", "shift", "meta"];
+      const ai = order.indexOf(a);
+      const bi = order.indexOf(b);
+      if (ai >= 0 && bi >= 0) return ai - bi;
+      if (ai >= 0) return -1;
+      if (bi >= 0) return 1;
+      return a.localeCompare(b);
+    })
+    .join("+");
+}
 
 export function ShortcutCaptureModal({
   open,
@@ -32,6 +57,7 @@ export function ShortcutCaptureModal({
   onConfirm,
   confirmLabel = "确定",
   zIndex = 12000,
+  existingShortcuts = [],
 }: ShortcutCaptureModalProps) {
   const [captured, setCaptured] = useState(initialShortcut);
   const liveRef = useRef("");
@@ -51,7 +77,7 @@ export function ShortcutCaptureModal({
     }
     if (e.key === "Enter" && liveRef.current.trim()) {
       e.preventDefault();
-      onConfirm(liveRef.current.trim());
+      // Enter 提交也走冲突检测，由按钮判断
       return;
     }
     const s = shortcutStringFromKeyboardEvent(e);
@@ -61,7 +87,7 @@ export function ShortcutCaptureModal({
       liveRef.current = s;
       setCaptured(s);
     }
-  }, [onClose, onConfirm]);
+  }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
@@ -73,7 +99,16 @@ export function ShortcutCaptureModal({
 
   if (!open) return null;
 
-  const canConfirm = captured.trim().length > 0;
+  const trimmed = captured.trim();
+  const targetNorm = trimmed ? normalizeShortcut(trimmed) : "";
+  const conflict = targetNorm
+    ? existingShortcuts.find(
+        (e) => e.shortcut && normalizeShortcut(e.shortcut) === targetNorm,
+      )
+    : undefined;
+  const sameAsInitial =
+    !!initialShortcut && targetNorm === normalizeShortcut(initialShortcut);
+  const canConfirm = trimmed.length > 0 && (!conflict || sameAsInitial);
 
   return (
     <div
@@ -99,6 +134,21 @@ export function ShortcutCaptureModal({
             <span style={{ color: "var(--text-muted)" }}>等待按键…</span>
           )}
         </div>
+
+        {conflict && !sameAsInitial ? (
+          <div style={conflictBox} role="alert">
+            <strong>⚠ 冲突</strong>：与{" "}
+            <code style={{ margin: "0 4px", padding: "1px 4px", background: "rgba(255,255,255,0.05)", borderRadius: 3 }}>
+              {conflict.shortcut}
+            </code>{" "}
+            （{conflict.label}）冲突，请换一个组合键。
+          </div>
+        ) : trimmed && !conflict ? (
+          <div style={okBox}>✓ 该组合键无冲突，可保存。</div>
+        ) : (
+          <div style={pendingBox}>按下任意组合键开始检测…</div>
+        )}
+
         <div
           style={{
             display: "flex",
@@ -123,9 +173,16 @@ export function ShortcutCaptureModal({
           </button>
           <button
             type="button"
-            style={btnPrimary}
+            style={canConfirm ? btnPrimary : btnDisabled}
             disabled={!canConfirm}
-            onClick={() => onConfirm(captured.trim())}
+            onClick={() => canConfirm && onConfirm(trimmed)}
+            title={
+              !trimmed
+                ? "请先按下组合键"
+                : conflict && !sameAsInitial
+                ? `与「${conflict.label}」冲突`
+                : "保存"
+            }
           >
             {confirmLabel}
           </button>
@@ -209,3 +266,44 @@ const btnPrimary: CSSProperties = {
   color: "var(--btn-primary-fg)",
   cursor: "pointer",
 };
+
+const btnDisabled: CSSProperties = {
+  ...btnPrimary,
+  borderColor: "var(--border)",
+  background: "transparent",
+  color: "var(--text-muted)",
+  cursor: "not-allowed",
+  opacity: 0.6,
+};
+
+const conflictBox: CSSProperties = {
+  marginTop: 10,
+  padding: "8px 10px",
+  fontSize: 12,
+  border: "1px solid rgba(239,68,68,0.5)",
+  background: "rgba(239,68,68,0.1)",
+  color: "#fca5a5",
+  borderRadius: 6,
+  lineHeight: 1.5,
+};
+
+const okBox: CSSProperties = {
+  marginTop: 10,
+  padding: "8px 10px",
+  fontSize: 12,
+  border: "1px solid rgba(34,197,94,0.5)",
+  background: "rgba(34,197,94,0.1)",
+  color: "#86efac",
+  borderRadius: 6,
+};
+
+const pendingBox: CSSProperties = {
+  marginTop: 10,
+  padding: "8px 10px",
+  fontSize: 12,
+  border: "1px solid var(--border)",
+  background: "transparent",
+  color: "var(--text-muted)",
+  borderRadius: 6,
+};
+

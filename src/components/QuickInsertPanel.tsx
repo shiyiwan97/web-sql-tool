@@ -1,6 +1,7 @@
 import { useState, type CSSProperties } from "react";
-import type { AppConfig, QuickInsertEntry } from "../types";
-import { ShortcutCaptureModal } from "./ShortcutCaptureModal";
+import type { AppConfig, PanelBoxStyle, QuickInsertEntry } from "../types";
+import { ShortcutCaptureModal, type ShortcutConflictEntry } from "./ShortcutCaptureModal";
+import { styleFromBox } from "./PanelStyleModal";
 
 type Props = {
   config: AppConfig;
@@ -19,6 +20,7 @@ function newEntry(): QuickInsertEntry {
 export function QuickInsertPanel({ config, setConfig }: Props) {
   const rows = config.quickInserts;
   const [captureRowId, setCaptureRowId] = useState<string | null>(null);
+  const ps = config.panelStyles.quickInsert;
 
   const captureRow = captureRowId
     ? rows.find((r) => r.id === captureRowId)
@@ -42,6 +44,11 @@ export function QuickInsertPanel({ config, setConfig }: Props) {
       ...c,
       quickInserts: c.quickInserts.filter((r) => r.id !== id),
     }));
+  };
+
+  const wrap = (b: PanelBoxStyle, me: typeof ps.expandTarget): CSSProperties => {
+    const base = styleFromBox(b);
+    return { ...base, flex: ps.expandTarget === me ? 1 : "0 0 auto" };
   };
 
   return (
@@ -70,57 +77,55 @@ export function QuickInsertPanel({ config, setConfig }: Props) {
           <div
             key={r.id}
             style={{
-              display: "grid",
-              gridTemplateColumns: "minmax(56px, 0.9fr) 1fr minmax(100px, 1.1fr) auto",
+              display: "flex",
               gap: 6,
               alignItems: "center",
+              flexWrap: "wrap",
               minWidth: 0,
             }}
           >
             <input
               className="input"
-              style={inp}
+              style={{ ...inp, ...wrap(ps.keyInput, "key") }}
               placeholder="键名"
               value={r.key}
               onChange={(e) => updateRow(r.id, { key: e.target.value })}
             />
             <input
               className="input"
-              style={inp}
+              style={{ ...inp, ...wrap(ps.valueInput, "value") }}
               placeholder="值"
               value={r.value}
               onChange={(e) => updateRow(r.id, { value: e.target.value })}
             />
-            <div style={{ display: "flex", gap: 4, minWidth: 0, alignItems: "center" }}>
-              <input
-                className="input"
-                style={{ ...inp, flex: 1, cursor: "default" }}
-                readOnly
-                placeholder="未绑定"
-                value={r.shortcut}
-                title={r.shortcut || "未绑定快捷键"}
-              />
-              <button
-                type="button"
-                style={btnBind}
-                onClick={() => setCaptureRowId(r.id)}
-              >
-                绑定…
-              </button>
-            </div>
+            <input
+              className="input"
+              style={{ ...inp, cursor: "default", ...wrap(ps.shortcutInput, "shortcut") }}
+              readOnly
+              placeholder="未绑定"
+              value={r.shortcut}
+              title={r.shortcut || "未绑定快捷键"}
+            />
             <button
               type="button"
-              style={btnDel}
+              style={{ ...btnBind, ...styleFromBox(ps.bindButton) }}
+              onClick={() => setCaptureRowId(r.id)}
+            >
+              {ps.bindButton.label || "绑定…"}
+            </button>
+            <button
+              type="button"
+              style={{ ...btnDel, ...styleFromBox(ps.deleteButton) }}
               onClick={() => removeRow(r.id)}
               aria-label="删除"
             >
-              ×
+              {ps.deleteButton.label || "×"}
             </button>
           </div>
         ))}
       </div>
-      <button type="button" style={{ ...btnAdd, marginTop: 10 }} onClick={addRow}>
-        + 添加一行
+      <button type="button" style={{ ...btnAdd, marginTop: 10, ...styleFromBox(ps.addButton) }} onClick={addRow}>
+        {ps.addButton.label || "+ 添加一行"}
       </button>
 
       <ShortcutCaptureModal
@@ -136,6 +141,26 @@ export function QuickInsertPanel({ config, setConfig }: Props) {
           )
         }
         initialShortcut={captureRow?.shortcut ?? ""}
+        existingShortcuts={(() => {
+          const out: ShortcutConflictEntry[] = [];
+          for (const r of rows) {
+            if (r.id === captureRowId) continue;
+            if (r.shortcut) out.push({ label: `快捷赋值 · ${r.key || "(未命名)"}`, shortcut: r.shortcut });
+          }
+          const h = config.hotkeys;
+          const labels: Record<string, string> = {
+            copyCurrentBlock: "复制当前分号块",
+            saveEditorSql: "保存到「已存 SQL」",
+            compressLineOrSelection: "压缩当前行/区域",
+            compressCurrentBlock: "压缩当前分号块",
+            openSettings: "打开设置面板",
+          };
+          for (const k of Object.keys(labels)) {
+            const sc = (h as any)[k] as string;
+            if (sc) out.push({ label: `快捷键 · ${labels[k]}`, shortcut: sc });
+          }
+          return out;
+        })()}
         onClose={() => setCaptureRowId(null)}
         confirmLabel="保存"
         onConfirm={(s) => {

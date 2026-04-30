@@ -10,6 +10,7 @@ import {
 import type {
   AppConfig,
   DdsCopybookPathGroup,
+  EditorAppearance,
   SqlSnippet,
   SqlCompressLevel,
   UiTheme,
@@ -18,6 +19,7 @@ import { normalizeConfig } from "../lib/configDefaults";
 import { applySqlFormatting } from "../lib/sqlEditorOps";
 import { saveFileHandle } from "../lib/fsHandleStore";
 import { analyzeSchemaCatalogFromCsvHandle } from "../lib/schemaCatalogBrowser";
+import { getOrCreateUserId, setUserId } from "../lib/configBlocks";
 
 type Props = {
   open: boolean;
@@ -29,6 +31,7 @@ type Props = {
 
 type SectionId =
   | "basic"
+  | "editor"
   | "paths"
   | "relations"
   | "sqlfmt"
@@ -122,6 +125,123 @@ function AccordionSection({
   );
 }
 
+function UserIdField() {
+  const [uid, setUid] = useState("");
+  useEffect(() => {
+    setUid(getOrCreateUserId());
+  }, []);
+  return (
+    <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+      <input
+        style={{ ...inp, flex: 1, maxWidth: 320 }}
+        value={uid}
+        onChange={(e) => setUid(e.target.value)}
+        placeholder="例如：alice@team-A"
+      />
+      <button
+        type="button"
+        style={btnSm}
+        onClick={() => {
+          const v = uid.trim();
+          if (!v) return;
+          setUserId(v);
+        }}
+      >
+        保存
+      </button>
+      <button
+        type="button"
+        style={btnSm}
+        onClick={() => {
+          const fresh = `user-${globalThis.crypto?.randomUUID?.() ?? String(Date.now())}`;
+          setUid(fresh);
+          setUserId(fresh);
+        }}
+      >
+        重新生成
+      </button>
+    </div>
+  );
+}
+
+function EditorAppearanceEditor({
+  value,
+  onChange,
+}: {
+  value: EditorAppearance;
+  onChange: (next: EditorAppearance) => void;
+}) {
+  const colorRow = (
+    label: string,
+    cur: string,
+    set: (v: string) => void,
+    placeholder: string,
+  ) => {
+    const safe = /^#[0-9a-fA-F]{6}$/.test(cur) ? cur : "#666666";
+    return (
+      <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6, flexWrap: "wrap" }}>
+        <label style={{ ...lbl2, marginBottom: 0, minWidth: 140 }}>{label}</label>
+        <input
+          type="color"
+          value={safe}
+          onChange={(e) => set(e.target.value)}
+          style={{ width: 32, height: 26, padding: 0, border: "1px solid var(--border)", borderRadius: 4, background: "transparent" }}
+          title={cur || "（沿用主题）"}
+        />
+        <input
+          type="text"
+          value={cur}
+          onChange={(e) => set(e.target.value)}
+          placeholder={placeholder}
+          style={{ ...inp, width: 140 }}
+        />
+        <button type="button" style={btnSm} onClick={() => set("")}>
+          清除
+        </button>
+      </div>
+    );
+  };
+  return (
+    <div>
+      <label style={lbl2}>基础主题</label>
+      <select
+        style={{ ...inp, maxWidth: 280 }}
+        value={value.baseTheme}
+        onChange={(e) =>
+          onChange({ ...value, baseTheme: e.target.value as EditorAppearance["baseTheme"] })
+        }
+      >
+        <option value="auto">跟随界面主题（auto）</option>
+        <option value="vs">vs（亮色）</option>
+        <option value="vs-dark">vs-dark（暗色）</option>
+        <option value="hc-light">hc-light（高对比 · 亮）</option>
+        <option value="hc-black">hc-black（高对比 · 暗）</option>
+      </select>
+      <p style={{ ...hint, marginTop: 6 }}>
+        颜色为空时使用主题默认值。建议先选好基础主题再叠加颜色。
+      </p>
+      {colorRow(
+        "选中行 背景色",
+        value.selectedLineBg,
+        (v) => onChange({ ...value, selectedLineBg: v }),
+        "#1f2937 等",
+      )}
+      {colorRow(
+        "活动行号 颜色",
+        value.activeLineNumberFg,
+        (v) => onChange({ ...value, activeLineNumberFg: v }),
+        "#facc15 等",
+      )}
+      {colorRow(
+        "普通行号 颜色",
+        value.lineNumberFg,
+        (v) => onChange({ ...value, lineNumberFg: v }),
+        "#6b7280 等",
+      )}
+    </div>
+  );
+}
+
 export function SettingsModal({
   open,
   config,
@@ -131,11 +251,19 @@ export function SettingsModal({
 }: Props) {
   const [draft, setDraft] = useState<AppConfig>(config);
   const [jsonText, setJsonText] = useState("");
-  const [schemaReports, setSchemaReports] = useState<Record<number, { ok: boolean; text: string }>>(
-    {},
-  );
+  const [schemaReports, setSchemaReports] = useState<
+    Record<
+      number,
+      {
+        ok: boolean;
+        summary: string;
+        issues: Array<{ line: number; kind: string; message: string }>;
+      }
+    >
+  >({});
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>({
     basic: true,
+    editor: false,
     paths: true,
     relations: true,
     sqlfmt: true,
@@ -256,31 +384,33 @@ export function SettingsModal({
           .map((s) => ({
             table: s.table,
             qualifiedName: s.qualifiedName,
+            comment: s.comment,
             fields: s.fields,
             primaryKeys: s.primaryKeys,
             fieldInfo: s.fieldInfo,
           }));
         return { ...d, tableCatalog: [...d.tableCatalog, ...add] };
       });
-      const issuePreview = report.issues.slice(0, 6);
-      const summaryLines = [
-        `表：${report.tables}  字段：${report.fields}  行：${report.rows}/${report.lines}`,
-        `重复列：${report.duplicates}  Key 标记：${report.primaryKeyMarks}  Issues：${report.issues.length}`,
-        ...(issuePreview.length > 0
-          ? ["", ...issuePreview.map((it) => `L${it.line} ${it.kind}: ${it.message}`)]
-          : []),
-        ...(report.issues.length > issuePreview.length
-          ? ["", `... 还有 ${report.issues.length - issuePreview.length} 条问题未展示`]
-          : []),
-      ];
       setSchemaReports((m) => ({
         ...m,
-        [groupIndex]: { ok: report.issues.length === 0, text: summaryLines.join("\n") },
+        [groupIndex]: {
+          ok: report.issues.length === 0,
+          summary: `表 ${report.tables} · 字段 ${report.fields} · 数据行 ${report.rows}/${report.lines} · 主键标记 ${report.primaryKeyMarks} · 重复 ${report.duplicates} · 问题 ${report.issues.length}`,
+          issues: report.issues.map((it) => ({
+            line: it.line,
+            kind: it.kind,
+            message: it.message,
+          })),
+        },
       }));
     } catch (e) {
       setSchemaReports((m) => ({
         ...m,
-        [groupIndex]: { ok: false, text: `解析失败：${e instanceof Error ? e.message : String(e)}` },
+        [groupIndex]: {
+          ok: false,
+          summary: `解析失败：${e instanceof Error ? e.message : String(e)}`,
+          issues: [],
+        },
       }));
     }
   };
@@ -384,13 +514,30 @@ export function SettingsModal({
               <option value="dark">Dark</option>
               <option value="light">Light</option>
             </select>
-            <p style={{ ...hint, marginTop: 10, marginBottom: 0 }}>
+            <p style={{ ...hint, marginTop: 10, marginBottom: 10 }}>
               主题会立即在预览中生效；点击「应用并保存」后写入本地配置与 JSON。
+            </p>
+
+            <label style={{ ...lbl2, marginTop: 4 }}>用户 ID（userId）</label>
+            <UserIdField />
+            <p style={{ ...hint, marginTop: 6, marginBottom: 0 }}>
+              用于在配置导出/比较合并时识别来源；建议填一个易识别的名字（如 <code>alice@team-A</code>）。
             </p>
           </AccordionSection>
 
           <AccordionSection
-            title="2. Schema CSV 路径组（有序）"
+            title="2. 编辑器外观"
+            expanded={openSections.editor}
+            onToggle={() => toggle("editor")}
+          >
+            <EditorAppearanceEditor
+              value={draft.editorAppearance}
+              onChange={(ea) => setDraft((d) => ({ ...d, editorAppearance: ea }))}
+            />
+          </AccordionSection>
+
+          <AccordionSection
+            title="3. Schema CSV 路径组（有序）"
             expanded={openSections.paths}
             onToggle={() => toggle("paths")}
           >
@@ -470,23 +617,69 @@ export function SettingsModal({
                     </button>
                   </div>
                   {schemaReports[idx] ? (
-                    <pre
+                    <div
                       style={{
                         marginTop: 10,
-                        marginBottom: 0,
                         padding: 10,
                         borderRadius: 8,
-                        border: "1px solid var(--border)",
+                        border: `1px solid ${schemaReports[idx]!.ok ? "rgba(34,197,94,0.4)" : "rgba(239,68,68,0.4)"}`,
                         background: "var(--bg-app)",
-                        color: schemaReports[idx]!.ok ? "var(--text)" : "var(--danger-muted)",
                         fontSize: 11,
-                        lineHeight: 1.5,
-                        whiteSpace: "pre-wrap",
-                        overflowWrap: "anywhere",
+                        lineHeight: 1.55,
                       }}
                     >
-                      {schemaReports[idx]!.text}
-                    </pre>
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 8,
+                          fontWeight: 600,
+                          color: schemaReports[idx]!.ok ? "var(--text)" : "var(--danger-muted)",
+                          marginBottom: schemaReports[idx]!.issues.length ? 8 : 0,
+                        }}
+                      >
+                        <span>{schemaReports[idx]!.ok ? "✅ 解析完成（无问题）" : `⚠ 发现 ${schemaReports[idx]!.issues.length} 个问题`}</span>
+                        <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>· {schemaReports[idx]!.summary}</span>
+                      </div>
+                      {schemaReports[idx]!.issues.length > 0 ? (
+                        <div
+                          style={{
+                            maxHeight: 220,
+                            overflow: "auto",
+                            border: "1px solid var(--border)",
+                            borderRadius: 6,
+                            background: "var(--bg-panel)",
+                          }}
+                        >
+                          <table
+                            style={{
+                              width: "100%",
+                              borderCollapse: "collapse",
+                              fontSize: 11,
+                            }}
+                          >
+                            <thead>
+                              <tr style={{ background: "var(--bg-elevated)", textAlign: "left", color: "var(--text-muted)" }}>
+                                <th style={{ padding: "4px 8px", fontWeight: 600, width: 60 }}>行</th>
+                                <th style={{ padding: "4px 8px", fontWeight: 600, width: 110 }}>类型</th>
+                                <th style={{ padding: "4px 8px", fontWeight: 600 }}>说明</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {schemaReports[idx]!.issues.map((it, i2) => (
+                                <tr key={i2} style={{ borderTop: "1px solid var(--border)" }}>
+                                  <td style={{ padding: "4px 8px", fontFamily: "var(--mono)", color: "var(--text-muted)" }}>
+                                    L{it.line}
+                                  </td>
+                                  <td style={{ padding: "4px 8px", color: "var(--danger-muted)" }}>{it.kind}</td>
+                                  <td style={{ padding: "4px 8px" }}>{it.message}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      ) : null}
+                    </div>
                   ) : null}
                 </li>
               ))}
@@ -501,7 +694,7 @@ export function SettingsModal({
           </AccordionSection>
 
           <AccordionSection
-            title="3. 表关系"
+            title="4. 表关系"
             expanded={openSections.relations}
             onToggle={() => toggle("relations")}
           >
@@ -539,7 +732,7 @@ export function SettingsModal({
           </AccordionSection>
 
           <AccordionSection
-            title="4. SQL 行长与总长度"
+            title="5. SQL 行长与总长度"
             expanded={openSections.sqlfmt}
             onToggle={() => toggle("sqlfmt")}
           >
@@ -688,7 +881,7 @@ export function SettingsModal({
           </AccordionSection>
 
           <AccordionSection
-            title="5. SQL 片段（本地）"
+            title="6. SQL 片段（本地）"
             expanded={openSections.snippets}
             onToggle={() => toggle("snippets")}
           >
@@ -756,7 +949,7 @@ export function SettingsModal({
           </AccordionSection>
 
           <AccordionSection
-            title="6. 配置 JSON"
+            title="7. 配置 JSON"
             expanded={openSections.json}
             onToggle={() => toggle("json")}
             sectionRef={jsonBlockRef}

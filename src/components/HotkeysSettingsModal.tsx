@@ -1,23 +1,54 @@
 import { useEffect, useState, type CSSProperties } from "react";
-import type { HotkeyConfig } from "../types";
-import { ShortcutCaptureModal } from "./ShortcutCaptureModal";
+import type { HotkeyConfig, QuickInsertEntry } from "../types";
+import { ShortcutCaptureModal, type ShortcutConflictEntry } from "./ShortcutCaptureModal";
 
 type Props = {
   open: boolean;
   hotkeys: HotkeyConfig;
+  /** 用于冲突检测的额外占用条目（如快捷赋值） */
+  quickInserts?: QuickInsertEntry[];
   onClose: () => void;
   onApply: (next: HotkeyConfig) => void;
 };
 
-type CaptureKind = "copy" | "save" | "compressLine" | "compressBlock" | null;
+type CaptureKind = "copy" | "save" | "compressLine" | "compressBlock" | "openSettings" | null;
 
 export function HotkeysSettingsModal({
   open,
   hotkeys,
+  quickInserts = [],
   onClose,
   onApply,
 }: Props) {
   const [capture, setCapture] = useState<CaptureKind>(null);
+
+  /** 排除当前正在编辑的项后，列出所有已占用的快捷键 */
+  const buildExisting = (
+    excludeKey: keyof HotkeyConfig,
+  ): ShortcutConflictEntry[] => {
+    const labels: Record<keyof HotkeyConfig, string> = {
+      copyCurrentBlock: "复制当前分号块",
+      saveEditorSql: "保存到「已存 SQL」",
+      compressLineOrSelection: "压缩当前行/区域",
+      compressCurrentBlock: "压缩当前分号块",
+      openSettings: "打开设置面板",
+    };
+    const out: ShortcutConflictEntry[] = [];
+    for (const k of Object.keys(labels) as Array<keyof HotkeyConfig>) {
+      if (k === excludeKey) continue;
+      const sc = hotkeys[k];
+      if (sc) out.push({ label: `快捷键 · ${labels[k]}`, shortcut: sc });
+    }
+    for (const qi of quickInserts) {
+      if (qi.shortcut) {
+        out.push({
+          label: `快捷赋值 · ${qi.key || "(未命名)"}`,
+          shortcut: qi.shortcut,
+        });
+      }
+    }
+    return out;
+  };
 
   useEffect(() => {
     if (!open || capture) return;
@@ -85,6 +116,16 @@ export function HotkeysSettingsModal({
             </button>
           </div>
 
+          <div style={row}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={lbl}>打开设置面板</div>
+              <code style={code}>{hotkeys.openSettings || "（未绑定）"}</code>
+            </div>
+            <button type="button" style={btn} onClick={() => setCapture("openSettings")}>
+              更改…
+            </button>
+          </div>
+
           <div style={{ display: "flex", justifyContent: "flex-end", marginTop: 16 }}>
             <button type="button" style={btn} onClick={onClose}>
               关闭
@@ -100,6 +141,7 @@ export function HotkeysSettingsModal({
           title="绑定：复制当前 SQL 块"
           description="与主界面「复制」、工具栏行为一致。"
           initialShortcut={hotkeys.copyCurrentBlock}
+          existingShortcuts={buildExisting("copyCurrentBlock")}
           confirmLabel="保存"
           onClose={() => setCapture(null)}
           onConfirm={(s) => {
@@ -115,6 +157,7 @@ export function HotkeysSettingsModal({
           title="绑定：保存 SQL 到已存列表"
           description="无选区时保存当前分号块，有选区时保存选区内容；去掉注释后自动新建一条存档并选中。"
           initialShortcut={hotkeys.saveEditorSql}
+          existingShortcuts={buildExisting("saveEditorSql")}
           confirmLabel="保存"
           onClose={() => setCapture(null)}
           onConfirm={(s) => {
@@ -130,6 +173,7 @@ export function HotkeysSettingsModal({
           title="绑定：压缩当前行/区域"
           description="光标所在行（或选区覆盖的行）会尝试从下一行搬词向上填充，直到接近每行最大字符。"
           initialShortcut={hotkeys.compressLineOrSelection}
+          existingShortcuts={buildExisting("compressLineOrSelection")}
           confirmLabel="保存"
           onClose={() => setCapture(null)}
           onConfirm={(s) => {
@@ -145,10 +189,27 @@ export function HotkeysSettingsModal({
           title="绑定：压缩当前分号块"
           description="对当前分号块执行同样的向上填充压缩（仅影响当前块）。"
           initialShortcut={hotkeys.compressCurrentBlock}
+          existingShortcuts={buildExisting("compressCurrentBlock")}
           confirmLabel="保存"
           onClose={() => setCapture(null)}
           onConfirm={(s) => {
             onApply({ ...hotkeys, compressCurrentBlock: s });
+            setCapture(null);
+          }}
+        />
+      ) : null}
+      {capture === "openSettings" ? (
+        <ShortcutCaptureModal
+          open
+          zIndex={13000}
+          title="绑定：打开设置面板"
+          description="在编辑器内/外按下都会唤起设置 Modal。建议组合 Ctrl+Alt 等避免冲突。"
+          initialShortcut={hotkeys.openSettings}
+          existingShortcuts={buildExisting("openSettings")}
+          confirmLabel="保存"
+          onClose={() => setCapture(null)}
+          onConfirm={(s) => {
+            onApply({ ...hotkeys, openSettings: s });
             setCapture(null);
           }}
         />

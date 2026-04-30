@@ -4,6 +4,8 @@ import { parseCopybook } from "./copybook/copybookParser";
 export type TableSchema = {
   table: string;
   qualifiedName?: string;
+  /** 表级注释 / remark */
+  comment?: string;
   fields: string[];
   primaryKeys: string[];
   /** Optional per-field metadata (from CSV, etc.) */

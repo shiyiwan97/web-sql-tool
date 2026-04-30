@@ -7,6 +7,8 @@ type Props = {
   onExportConfig: () => void;
   onOpenHotkeys: () => void;
   onOpenRelations: () => void;
+  onOpenTableCatalog: () => void;
+  onOpenConfigDiff: () => void;
 };
 
 export function MenuBar({
@@ -16,6 +18,8 @@ export function MenuBar({
   onExportConfig,
   onOpenHotkeys,
   onOpenRelations,
+  onOpenTableCatalog,
+  onOpenConfigDiff,
 }: Props) {
   const [open, setOpen] = useState<"file" | "settings" | null>(null);
 
@@ -82,6 +86,18 @@ export function MenuBar({
             >
               导出配置 JSON…
             </button>
+            <button
+              type="button"
+              className="menubar-dd-item"
+              style={itemStyle}
+              role="menuitem"
+              onClick={() => {
+                onOpenConfigDiff();
+                setOpen(null);
+              }}
+            >
+              比较 / 合并配置 JSON…
+            </button>
           </div>
         )}
       </div>
@@ -108,6 +124,18 @@ export function MenuBar({
               }}
             >
               表关系…
+            </button>
+            <button
+              type="button"
+              className="menubar-dd-item"
+              style={itemStyle}
+              role="menuitem"
+              onClick={() => {
+                onOpenTableCatalog();
+                setOpen(null);
+              }}
+            >
+              表配置（查看）…
             </button>
             <button
               type="button"
