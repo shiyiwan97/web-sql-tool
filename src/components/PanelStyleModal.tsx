@@ -12,6 +12,7 @@ import type {
   PanelTextStyle,
   QuickInsertPanelStyle,
   SavedSqlPanelStyle,
+  SearchPanelPkBadgeStyle,
   SearchPanelStyle,
   TableCatalogPanelStyle,
 } from "../types";
@@ -31,7 +32,7 @@ const TITLES: Record<PanelStyleTarget, string> = {
   search: "搜索面板 · 样式",
   quickInsert: "快捷赋值面板 · 样式",
   savedSql: "已存 SQL 面板 · 样式",
-  tableCatalog: "表配置查看 · 样式",
+  tableCatalog: "查看表 · 样式",
 };
 
 export function PanelStyleModal({ open, target, config, onClose, onApply }: Props) {
@@ -142,6 +143,44 @@ export function PanelStyleModal({ open, target, config, onClose, onApply }: Prop
 
 /* ============================== Editors ============================== */
 
+function PrimaryKeyBadgeStyleFields({
+  value,
+  onChange,
+}: {
+  value: SearchPanelPkBadgeStyle;
+  onChange: (next: SearchPanelPkBadgeStyle) => void;
+}) {
+  return (
+    <>
+      <div style={{ ...fieldRow, alignItems: "center" }}>
+        <div style={fieldLabel}>文案</div>
+        <input
+          type="text"
+          value={value.label}
+          onChange={(e) => onChange({ ...value, label: e.target.value })}
+          placeholder="PK"
+          style={{ ...inputStyle, width: 120 }}
+        />
+      </div>
+      <div style={{ ...fieldRow, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={fieldLabel}>文字颜色</div>
+        <ColorInput value={value.color} onChange={(c) => onChange({ ...value, color: c })} />
+      </div>
+      <div style={{ ...fieldRow, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={fieldLabel}>背景色</div>
+        <ColorInput
+          value={value.backgroundColor}
+          onChange={(c) => onChange({ ...value, backgroundColor: c })}
+        />
+      </div>
+      <div style={{ ...fieldRow, alignItems: "center", flexWrap: "wrap" }}>
+        <div style={fieldLabel}>边框色</div>
+        <ColorInput value={value.borderColor} onChange={(c) => onChange({ ...value, borderColor: c })} />
+      </div>
+    </>
+  );
+}
+
 function SearchEditor({
   value,
   onChange,
@@ -167,6 +206,16 @@ function SearchEditor({
             onChange={(t) => onChange({ ...value, [f.key]: t })}
           />
         ))}
+      </Group>
+
+      <Group title="主键标注（字段列表）">
+        <PrimaryKeyBadgeStyleFields
+          value={value.primaryKeyBadge}
+          onChange={(pk) => onChange({ ...value, primaryKeyBadge: pk })}
+        />
+        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+          颜色项可填 #rrggbb 或 rgba(...)；点「清除」后该项沿用内置默认值。
+        </div>
       </Group>
 
       <Group title="行高与注释换行">
@@ -218,7 +267,13 @@ function TableCatalogEditor({
   value: TableCatalogPanelStyle;
   onChange: (next: TableCatalogPanelStyle) => void;
 }) {
-  const fields: Array<{ key: keyof TableCatalogPanelStyle; label: string }> = [
+  const textFields: Array<{
+    key: keyof Pick<
+      TableCatalogPanelStyle,
+      "tableName" | "fieldName" | "tableComment" | "fieldComment" | "fieldType"
+    >;
+    label: string;
+  }> = [
     { key: "tableName", label: "表名" },
     { key: "fieldName", label: "字段名" },
     { key: "tableComment", label: "表注释" },
@@ -227,7 +282,7 @@ function TableCatalogEditor({
   ];
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-      {fields.map((f) => (
+      {textFields.map((f) => (
         <TextStyleEditor
           key={f.key}
           label={f.label}
@@ -235,6 +290,29 @@ function TableCatalogEditor({
           onChange={(t) => onChange({ ...value, [f.key]: t })}
         />
       ))}
+
+      <Group title="主键标注（查看表）">
+        <PrimaryKeyBadgeStyleFields
+          value={value.primaryKeyBadge}
+          onChange={(pk) => onChange({ ...value, primaryKeyBadge: pk })}
+        />
+        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+          与搜索面板相同选项，仅作用于「查看表」右侧字段表格中的主键列。
+        </div>
+      </Group>
+
+      <Group title="搜索命中字段名 · 行背景">
+        <div style={{ ...fieldRow, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={fieldLabel}>高亮背景色</div>
+          <ColorInput
+            value={value.fieldSearchHighlightBg}
+            onChange={(c) => onChange({ ...value, fieldSearchHighlightBg: c })}
+          />
+        </div>
+        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+          在「查看表」里左侧搜索时，若关键字命中某行的<strong>字段名</strong>，右侧字段表为该行的背景叠加此颜色。#rrggbb / rgba 均可；点「清除」则不高亮。
+        </div>
+      </Group>
     </div>
   );
 }
@@ -644,6 +722,29 @@ export function styleFromBox(b: PanelBoxStyle): CSSProperties {
   return out;
 }
 
+/** 主键标注：解析空字符串为内置默认 */
+export function pkBadgeResolved(b: SearchPanelPkBadgeStyle): {
+  label: string;
+  boxStyle: CSSProperties;
+} {
+  const label = b.label.trim() || "PK";
+  const color = b.color.trim() || "#facc15";
+  const backgroundColor = b.backgroundColor.trim() || "rgba(250,204,21,0.15)";
+  const borderColor = b.borderColor.trim() || "rgba(250,204,21,0.4)";
+  return {
+    label,
+    boxStyle: {
+      fontSize: 9,
+      fontWeight: 700,
+      padding: "1px 4px",
+      background: backgroundColor,
+      color,
+      border: `1px solid ${borderColor}`,
+      borderRadius: 3,
+    },
+  };
+}
+
 /** 字段类型主名映射：取 "DECIMAL(8,0)" 中的 DECIMAL 做匹配；未命中返回原字符串 */
 export function applyTypeMapping(
   raw: string,
@@ -663,6 +764,7 @@ export function applyTypeMapping(
 function SearchPreview({ style }: { style: SearchPanelStyle }) {
   const renderField = (f: string, t: string, c: string, pk: boolean) => {
     const tShort = applyTypeMapping(t, style.typeMappings);
+    const pkRes = pk ? pkBadgeResolved(style.primaryKeyBadge) : null;
     return (
       <li
         key={f}
@@ -676,21 +778,7 @@ function SearchPreview({ style }: { style: SearchPanelStyle }) {
           height: style.fieldItemHeight > 0 ? style.fieldItemHeight : undefined,
         }}
       >
-        {pk ? (
-          <span
-            style={{
-              fontSize: 9,
-              fontWeight: 700,
-              padding: "1px 4px",
-              background: "rgba(250,204,21,0.15)",
-              color: "#facc15",
-              border: "1px solid rgba(250,204,21,0.4)",
-              borderRadius: 3,
-            }}
-          >
-            PK
-          </span>
-        ) : null}
+        {pkRes ? <span style={pkRes.boxStyle}>{pkRes.label}</span> : null}
         <code style={{ fontFamily: "var(--mono)", ...styleFromText(style.fieldName) }}>s.{f}</code>
         <span
           style={{
@@ -752,6 +840,12 @@ function SearchPreview({ style }: { style: SearchPanelStyle }) {
 }
 
 function TableCatalogPreview({ style }: { style: TableCatalogPanelStyle }) {
+  const hitBg = style.fieldSearchHighlightBg.trim();
+  const pk = pkBadgeResolved(style.primaryKeyBadge);
+  const rows = [
+    { f: "STUID", t: "CHAR(10)", c: "学生ID", nameHit: true, isPk: true },
+    { f: "STUNM", t: "VARCHAR(40)", c: "学生姓名", nameHit: false, isPk: false },
+  ];
   return (
     <div
       style={{
@@ -761,6 +855,9 @@ function TableCatalogPreview({ style }: { style: TableCatalogPanelStyle }) {
         padding: 12,
       }}
     >
+      <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 6 }}>
+        预览：假设搜索「STU」，字段名 STUID 命中 → 行背景如下；首行含主键标注
+      </div>
       <div style={{ fontWeight: 700, ...styleFromText(style.tableName) }}>LIB.STUDENT</div>
       <div style={styleFromText(style.tableComment)}>学生信息表</div>
       <table style={{ width: "100%", borderCollapse: "collapse", marginTop: 8 }}>
@@ -772,12 +869,20 @@ function TableCatalogPreview({ style }: { style: TableCatalogPanelStyle }) {
           </tr>
         </thead>
         <tbody>
-          {[
-            { f: "STUID", t: "CHAR(10)", c: "学生ID" },
-            { f: "STUNM", t: "VARCHAR(40)", c: "学生姓名" },
-          ].map((x) => (
-            <tr key={x.f} style={{ borderTop: "1px solid var(--border)" }}>
-              <td style={{ ...td, fontFamily: "var(--mono)", ...styleFromText(style.fieldName) }}>{x.f}</td>
+          {rows.map((x) => (
+            <tr
+              key={x.f}
+              style={{
+                borderTop: "1px solid var(--border)",
+                ...(hitBg && x.nameHit ? { background: hitBg } : {}),
+              }}
+            >
+              <td style={{ ...td, fontFamily: "var(--mono)", ...styleFromText(style.fieldName) }}>
+                <span style={{ display: "inline-flex", alignItems: "baseline", gap: 6, flexWrap: "wrap" }}>
+                  {x.isPk ? <span style={pk.boxStyle}>{pk.label}</span> : null}
+                  <span>{x.f}</span>
+                </span>
+              </td>
               <td style={{ ...td, fontFamily: "var(--mono)", ...styleFromText(style.fieldType) }}>{x.t}</td>
               <td style={{ ...td, ...styleFromText(style.fieldComment) }}>{x.c}</td>
             </tr>

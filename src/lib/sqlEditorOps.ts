@@ -5,6 +5,33 @@ function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+function sqlKeywordsUpper(cfg: AppConfig): boolean {
+  return cfg.sqlFormatting.searchInsertKeywordsUppercase !== false;
+}
+
+function kwSel(cfg: AppConfig): string {
+  return sqlKeywordsUpper(cfg) ? "SELECT" : "select";
+}
+
+function kwFrom(cfg: AppConfig): string {
+  return sqlKeywordsUpper(cfg) ? "FROM" : "from";
+}
+
+function kwWhere(cfg: AppConfig): string {
+  return sqlKeywordsUpper(cfg) ? "WHERE" : "where";
+}
+
+/** e.g. LEFT JOIN / left join */
+function kwJoinClause(cfg: AppConfig, joinKind: string): string {
+  const j = sqlKeywordsUpper(cfg) ? joinKind : joinKind.toLowerCase();
+  const joinWord = sqlKeywordsUpper(cfg) ? "JOIN" : "join";
+  return `${j} ${joinWord}`;
+}
+
+function kwOn(cfg: AppConfig): string {
+  return sqlKeywordsUpper(cfg) ? "ON" : "on";
+}
+
 /** 用于判断 JOIN / 逗号表是否已存在，避免重复插入 */
 function compactSqlSig(s: string): string {
   return s.replace(/\s+/g, " ").trim();
@@ -61,6 +88,13 @@ export function wrapSqlLinesNoIndent(sql: string, maxLen: number): string {
     if (rest) out.push(rest);
   }
   return out.join("\n");
+}
+
+/** 硬换行模式：仅按行长断开超长行（不施加压缩等级），用于程序化插入后的即时折行 */
+export function applyHardWrapLinesOnly(sql: string, cfg: AppConfig["sqlFormatting"]): string {
+  if (cfg.editorLineBreak !== "hard") return sql;
+  const maxLen = Math.max(8, Math.floor(cfg.maxCharsPerLine) || 72);
+  return wrapSqlLinesNoIndent(sql.replace(/\r\n/g, "\n"), maxLen);
 }
 
 /**
@@ -152,6 +186,18 @@ export function extractAliasedTables(sql: string): Map<string, string> {
   while ((m = re.exec(sql)) !== null) {
     map.set(tableKey(m[1]), m[2].toUpperCase());
   }
+
+  /** FROM T （无别名）：形如 select * from score / from score where … */
+  const implicitFromRe =
+    /\bFROM\s+([\w.]+)(?=\s*(?:,|\bWHERE\b|\bGROUP\b|\bORDER\b|\bHAVING\b|\b(?:LEFT|RIGHT|INNER|FULL|CROSS)\s+JOIN\b|\bJOIN\b|\s*$))/gi;
+  let im: RegExpExecArray | null;
+  while ((im = implicitFromRe.exec(sql)) !== null) {
+    const tk = tableKey(im[1]);
+    if (!map.has(tk)) {
+      map.set(tk, defaultAliasFor(tk));
+    }
+  }
+
   const fromM = sql.match(
     /\bFROM\b([\s\S]*?)(?=\bWHERE\b|\bGROUP\b|\bORDER\b|\bHAVING\b|$)/i,
   );
@@ -162,8 +208,18 @@ export function extractAliasedTables(sql: string): Map<string, string> {
     for (const part of head.split(",")) {
       const p = part.trim();
       if (!p) continue;
-      const cm = /^([\w.]+)\s+(?:AS\s+)?([A-Za-z_]\w*)/i.exec(p);
-      if (cm) map.set(tableKey(cm[1]), cm[2].toUpperCase());
+      const cm = /^([\w.]+)\s+(?:AS\s+)?([A-Za-z_]\w*)\s*$/i.exec(p);
+      if (cm) {
+        map.set(tableKey(cm[1]), cm[2].toUpperCase());
+        continue;
+      }
+      const tblOnly = /^([\w.]+)\s*$/i.exec(p);
+      if (tblOnly) {
+        const tk = tableKey(tblOnly[1]);
+        if (!map.has(tk)) {
+          map.set(tk, defaultAliasFor(tk));
+        }
+      }
     }
   }
   return map;
@@ -210,7 +266,9 @@ function appendCommaInFrom(
   sql: string,
   qualified: string,
   alias: string,
+  config: AppConfig,
 ): { text: string; cursorOffset: number } {
+  const fromKw = kwFrom(config);
   if (
     new RegExp(`\\b${escapeRe(qualified)}\\s+${escapeRe(alias)}\\b`, "i").test(
       sql,
@@ -218,12 +276,12 @@ function appendCommaInFrom(
   ) {
     return { text: sql, cursorOffset: sql.length };
   }
-  const whereRe = /\bWHERE\b/i;
+  const whereRe = new RegExp(`\\b${kwWhere(config)}\\b`, "i");
   const w = whereRe.exec(sql);
   if (w) {
     const head = sql.slice(0, w.index);
     const tail = sql.slice(w.index);
-    const fromRe = /\bFROM\b/i;
+    const fromRe = new RegExp(`\\b${fromKw}\\b`, "i");
     const f = fromRe.exec(head);
     if (!f) return { text: sql, cursorOffset: sql.length };
     const before = head.slice(0, f.index + f[0].length);
@@ -233,10 +291,10 @@ function appendCommaInFrom(
     const text = `${headToAlias} ${tail}`;
     return { text, cursorOffset: headToAlias.length };
   }
-  const fromRe = /\bFROM\b/i;
+  const fromRe = new RegExp(`\\b${fromKw}\\b`, "i");
   const f = fromRe.exec(sql);
   if (!f) {
-    const text = `${sql}\nFROM ${qualified} ${alias}`;
+    const text = `${sql}\n${fromKw} ${qualified} ${alias}`;
     return { text, cursorOffset: text.length };
   }
   const before = sql.slice(0, f.index + f[0].length);
@@ -294,8 +352,6 @@ export function insertTableWithJoinsAtBlock(
   return { sql: merged, cursorOffset: b.start + inner.cursorOffset };
 }
 
-const SELECT_PREFIX_LEN = "SELECT ".length;
-
 export function insertFieldIntoSelect(
   sql: string,
   table: string,
@@ -307,12 +363,13 @@ export function insertFieldIntoSelect(
   const aliases = extractAliasedTables(sql);
   const alias = aliases.get(key) ?? defaultAliasFor(key);
   const col = `${alias}.${field}`;
+  const sel = kwSel(config);
 
   const trimmed = sql.trim();
   if (!trimmed) {
     const from = cat?.qualifiedName ?? key;
-    const text = `SELECT ${col}\nFROM ${from} ${alias}`;
-    return { text, cursorOffset: SELECT_PREFIX_LEN + col.length };
+    const text = `${sel} ${col}\n${kwFrom(config)} ${from} ${alias}`;
+    return { text, cursorOffset: sel.length + 1 + col.length };
   }
 
   const fromIdx = /\bFROM\b/i.exec(trimmed);
@@ -325,8 +382,8 @@ export function insertFieldIntoSelect(
   const after = trimmed.slice(fromIdx.index);
   const listPart = before.replace(/^SELECT\s+/i, "").trim();
   if (!listPart || listPart === "*") {
-    const text = `SELECT ${col}\n${after}`;
-    return { text, cursorOffset: SELECT_PREFIX_LEN + col.length };
+    const text = `${sel} ${col}\n${after}`;
+    return { text, cursorOffset: sel.length + 1 + col.length };
   }
   if (/,\s*$/.test(listPart)) {
     const text = `${before} ${col}\n${after}`;
@@ -348,7 +405,7 @@ export function insertTableWithJoins(
 
   const trimmed = sql.trim();
   if (!trimmed) {
-    const text = `SELECT *\nFROM ${qualified} ${newAlias}`;
+    const text = `${kwSel(config)} *\n${kwFrom(config)} ${qualified} ${newAlias}`;
     return { text, cursorOffset: text.length };
   }
 
@@ -385,9 +442,12 @@ export function insertTableWithJoins(
       aliasByKey.set(key, newAlias);
       const onClause = applyAliasesToOn(rel.onClause, aliasByKey);
       const jk = rel.joinKind ?? "LEFT";
-      insertJoin(`\n${jk} JOIN ${qualified} ${newAlias}\n  ON ${onClause}`, true);
+      insertJoin(
+        `\n${kwJoinClause(config, jk)} ${qualified} ${newAlias}\n  ${kwOn(config)} ${onClause}`,
+        true,
+      );
     } else {
-      const ac = appendCommaInFrom(text, qualified, newAlias);
+      const ac = appendCommaInFrom(text, qualified, newAlias, config);
       text = ac.text;
       caretOffset = ac.cursorOffset;
       map = extractAliasedTables(text);
@@ -415,7 +475,10 @@ export function insertTableWithJoins(
       const onClause = applyAliasesToOn(rel.onClause, aliasByKey);
       const jk = rel.joinKind ?? "LEFT";
       if (
-        insertJoin(`\n${jk} JOIN ${needQual} ${needAlias}\n  ON ${onClause}`, false)
+        insertJoin(
+          `\n${kwJoinClause(config, jk)} ${needQual} ${needAlias}\n  ${kwOn(config)} ${onClause}`,
+          false,
+        )
       ) {
         expanded = true;
         break;

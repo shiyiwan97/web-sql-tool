@@ -177,3 +177,186 @@ body.find-widget-open .workbench-hover-container .hover-row {
   gap: 8px !important;
   align-items: center !important;
 }
+
+/* 查看表悬停：表格边框（补充内联样式在部分主题下不明显的情况） */
+.monaco-hover table {
+  border-collapse: collapse;
+}
+.monaco-hover table,
+.monaco-hover table th,
+.monaco-hover table td {
+  border: 1px solid var(--border) !important;
+}
+
+/* TEMP：Monaco 词高亮测试 — 与 monacoTempWordHighlight.ts 一并删除 */
+.monaco-editor .sql-tool-temp-word-highlight {
+  background-color: #ffeb3b !important;
+  color: #000000 !important;
+}
+
+/* 调整位置模式：非选中片段 / 当前选中 */
+.monaco-editor .sql-reposition-peer {
+  background-color: rgba(239, 68, 68, 0.38) !important;
+}
+.monaco-editor .sql-reposition-focus {
+  background-color: rgba(34, 197, 94, 0.48) !important;
+}
+
+/* ---------- 调整位置 · 无效光标提示（贴近 VS Code notificationToast） ---------- */
+@keyframes reposition-notification-enter {
+  from {
+    opacity: 0;
+    transform: translate3d(10px, 0, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+.reposition-vscode-notification-host {
+  position: fixed;
+  right: 16px;
+  bottom: 22px;
+  z-index: 2147483000;
+  max-width: min(380px, calc(100vw - 28px));
+  pointer-events: auto;
+  isolation: isolate;
+  animation: reposition-notification-enter 0.14s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+html[data-theme="dark"] .reposition-vscode-notification-host {
+  --rn-bg: #252526;
+  --rn-border: #474747;
+  --rn-fg: #cccccc;
+  --rn-muted: rgba(204, 204, 204, 0.72);
+  --rn-accent: #3794ff;
+  --rn-btn-hover: rgba(255, 255, 255, 0.08);
+  --rn-dropdown-bg: #252526;
+  --rn-dropdown-border: #474747;
+  --rn-dropdown-hover-bg: #094771;
+  --rn-dropdown-hover-fg: #ffffff;
+  --rn-shadow: 0 2px 8px rgba(0, 0, 0, 0.36), 0 0 0 1px rgba(0, 0, 0, 0.45);
+}
+
+html[data-theme="light"] .reposition-vscode-notification-host {
+  --rn-bg: #ffffff;
+  --rn-border: rgba(0, 0, 0, 0.14);
+  --rn-fg: #3b3b3b;
+  --rn-muted: rgba(97, 97, 97, 0.85);
+  --rn-accent: #0078d4;
+  --rn-btn-hover: rgba(0, 0, 0, 0.06);
+  --rn-dropdown-bg: #ffffff;
+  --rn-dropdown-border: rgba(0, 0, 0, 0.14);
+  --rn-dropdown-hover-bg: #e8e8e8;
+  --rn-dropdown-hover-fg: #333333;
+  --rn-shadow: 0 2px 8px rgba(0, 0, 0, 0.14), 0 0 0 1px rgba(0, 0, 0, 0.06);
+}
+
+.reposition-vscode-notification-toast {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  overflow: visible;
+  border-radius: 2px;
+  border: 1px solid var(--rn-border);
+  background: var(--rn-bg);
+  box-shadow: var(--rn-shadow);
+  font-family: var(--font);
+}
+
+.reposition-vscode-notification-accent {
+  width: 3px;
+  flex-shrink: 0;
+  background: var(--rn-accent);
+}
+
+.reposition-vscode-notification-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 9px 8px 9px 11px;
+}
+
+.reposition-vscode-notification-msg {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.45;
+  font-weight: 400;
+  color: var(--rn-fg);
+  letter-spacing: 0.01em;
+}
+
+.reposition-vscode-notification-actions {
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 2px;
+  flex-shrink: 0;
+  margin-top: -2px;
+}
+
+.reposition-vscode-notification-menu-wrap {
+  position: relative;
+  flex-shrink: 0;
+}
+
+.reposition-vscode-notification-iconbtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--rn-muted);
+  cursor: pointer;
+}
+
+.reposition-vscode-notification-iconbtn:hover {
+  background: var(--rn-btn-hover);
+  color: var(--rn-fg);
+}
+
+.reposition-vscode-notification-dropdown {
+  position: absolute;
+  bottom: calc(100% + 4px);
+  right: 0;
+  min-width: 168px;
+  padding: 2px;
+  border-radius: 2px;
+  background: var(--rn-dropdown-bg);
+  border: 1px solid var(--rn-dropdown-border);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.28);
+  z-index: 2147483001;
+}
+
+html[data-theme="light"] .reposition-vscode-notification-dropdown {
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.12);
+}
+
+.reposition-vscode-notification-menuitem {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 5px 10px;
+  font-size: 13px;
+  line-height: 1.35;
+  border: none;
+  border-radius: 2px;
+  background: transparent;
+  color: var(--rn-fg);
+  cursor: pointer;
+}
+
+.reposition-vscode-notification-menuitem:hover {
+  background: var(--rn-dropdown-hover-bg);
+  color: var(--rn-dropdown-hover-fg);
+}

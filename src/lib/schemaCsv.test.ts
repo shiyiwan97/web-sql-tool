@@ -52,6 +52,15 @@ T2,,,,CHAR,1,,0
     // 错误信息应该包含具体行号
     expect(report.issues.every((x) => /第 \d+ 行/.test(x.message))).toBe(true);
   });
+
+  it("firstRow:data parses header-shaped first line as data", () => {
+    const csv = `表名,表注释,列名,列注释,类型,长度,精度,是否是key
+STUDENT,,STUID,学生ID,CHAR,10,,Y
+`;
+    const forced = analyzeSchemaCsv(csv, { firstRow: "data" });
+    expect(forced.schemas.some((s) => s.table === "STUDENT")).toBe(true);
+    expect(forced.schemas.some((s) => s.table === "表名")).toBe(true);
+  });
 });
 
 

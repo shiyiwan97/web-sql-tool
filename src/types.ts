@@ -42,6 +42,26 @@ export interface SqlFormatting {
   showColumnGuide: boolean;
   editorLineBreak: EditorLineBreak;
   compressLevel: SqlCompressLevel;
+  /** 搜索侧栏点击插入表/JOIN 时，关键字是否大写（SELECT / FROM / LEFT JOIN / ON 等） */
+  searchInsertKeywordsUppercase: boolean;
+}
+
+/** 编辑器内 SQL 静态提示（JOIN 顺序等） */
+export interface SqlDiagnosticsSettings {
+  /** 是否启用「左侧大表驱动右侧小表」类 JOIN 顺序提示（依赖查看表中的估计行数） */
+  enableJoinLargeDrivingSmallWarning: boolean;
+  /** 是否启用「JOIN ON 与配置的表关系不一致」提示 */
+  enableJoinOnConfigMismatchWarning: boolean;
+  /**
+   * JOIN 书写顺序告警：左侧（JOIN 前的表）估计行数 ≥ 该值，且大于右侧表登记行数时提示。
+   * 设为 0 表示不设下限（只要左侧大于右侧即提示）。
+   */
+  joinLargeDrivingSmallMinRows: number;
+  /**
+   * 调整位置：用快捷键/状态栏尝试进入模式但光标不在可识别的表或 SELECT 列上时，是否弹出说明提示。
+   * 「不再显示该提示」会将此项设为 false。
+   */
+  showRepositionInvalidCursorHint: boolean;
 }
 
 /** 本地保存的 SQL 片段（设置中编辑，可导入导出随配置 JSON） */
@@ -61,6 +81,8 @@ export interface TableCatalogEntry {
   fields: string[];
   /** Primary key fields (best-effort from DDS) */
   primaryKeys?: string[];
+  /** 估计行数；用于 JOIN 书写顺序性能提示；未登记则不参与 */
+  estimatedRowCount?: number | null;
   /** Optional per-field metadata for searchable dropdowns */
   fieldInfo?: Record<
     string,
@@ -130,6 +152,32 @@ export interface HotkeyConfig {
   compressCurrentBlock: string;
   /** 打开设置面板，例如 Ctrl+Alt+, */
   openSettings: string;
+  /** 打开快捷键设置面板（全局生效） */
+  openHotkeysSettings: string;
+  /**
+   * Extend Selection（扩展选区）：与 IntelliJ IDEA 同名动作同类，映射 Monaco 智能扩选。
+   * 默认 Ctrl+W，并在编辑器聚焦时避免触发浏览器关闭标签页。
+   */
+  extendSelection: string;
+  /**
+   * Shrink Selection（缩小选区）：与 IntelliJ IDEA 同名动作同类，映射 Monaco 缩小选区。
+   */
+  shrinkSelection: string;
+  /** 「调整位置」模式：检测光标处表/字段并进入重排会话（会话内再按一次可结束会话） */
+  repositionActivate: string;
+  /** 调整位置：指向前一项（默认 Left；仅在「调整位置」模式中生效） */
+  repositionSelectPrev: string;
+  repositionSelectNext: string;
+  /** 与前一项交换当前选中片段（默认 Ctrl+Left） */
+  repositionSwapPrev: string;
+  repositionSwapNext: string;
+  /** 扩选：与前一项一并选中（默认 Shift+Left） */
+  repositionExtendWithPrev: string;
+  repositionExtendWithNext: string;
+  /** 收缩：从多选中去掉序号最小的一项（仅剩一项时无效） */
+  repositionShrinkRemovePrev: string;
+  /** 收缩：从多选中去掉序号最大的一项（仅剩一项时无效） */
+  repositionShrinkRemoveNext: string;
 }
 
 /**
@@ -157,6 +205,18 @@ export interface PanelButtonStyle extends PanelBoxStyle {
   label: string;
 }
 
+/** 搜索 / 查看表等面板共用的：主键字段旁标注（如 PK） */
+export interface SearchPanelPkBadgeStyle {
+  /** 显示文案；空则显示 PK */
+  label: string;
+  /** 文字颜色；空则用默认金色 */
+  color: string;
+  /** 背景色；空则用默认半透明底 */
+  backgroundColor: string;
+  /** 边框色；空则用默认 */
+  borderColor: string;
+}
+
 /** 搜索面板：5 类文字 */
 export interface SearchPanelStyle {
   tableName: PanelTextStyle;
@@ -164,6 +224,8 @@ export interface SearchPanelStyle {
   tableComment: PanelTextStyle;
   fieldComment: PanelTextStyle;
   fieldType: PanelTextStyle;
+  /** 主键字段旁标注 */
+  primaryKeyBadge: SearchPanelPkBadgeStyle;
   /** 字段类型映射：例如 { CHARACTER: "C", DECIMAL: "D" } */
   typeMappings: Array<{ from: string; to: string }>;
   /** 表 item 行高（px，0 = 自动） */
@@ -198,13 +260,17 @@ export interface SavedSqlPanelStyle {
   expandTarget: "name" | "show" | "use" | "delete" | "none";
 }
 
-/** 表配置查看：与搜索一致的 5 类文字（不含 typeMappings/heights/wrap，只复用文字部分） */
+/** 查看表 Modal：表格与注释的文字样式 + 搜索命中字段行的背景 */
 export interface TableCatalogPanelStyle {
   tableName: PanelTextStyle;
   fieldName: PanelTextStyle;
   tableComment: PanelTextStyle;
   fieldComment: PanelTextStyle;
   fieldType: PanelTextStyle;
+  /** 主键字段旁标注（与搜索面板同款可选项） */
+  primaryKeyBadge: SearchPanelPkBadgeStyle;
+  /** 左侧搜索命中字段名时，右侧字段列表该行的背景色；空表示不加背景 */
+  fieldSearchHighlightBg: string;
 }
 
 export interface PanelStyles {
@@ -222,6 +288,8 @@ export interface EditorAppearance {
   selectedLineBg: string;
   /** 当前光标行的行号颜色（active line number）；"" 表示沿用主题默认 */
   activeLineNumberFg: string;
+  /** 普通行的行号颜色；"" 表示沿用主题默认 */
+  lineNumberFg: string;
 }
 
 export interface AppConfig {
@@ -248,4 +316,6 @@ export interface AppConfig {
   panelStyles: PanelStyles;
   /** 编辑器（Monaco）外观自定义 */
   editorAppearance: EditorAppearance;
+  /** JOIN 顺序等编辑器提示阈值 */
+  sqlDiagnosticsSettings: SqlDiagnosticsSettings;
 }

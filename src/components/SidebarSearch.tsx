@@ -1,7 +1,7 @@
 import { useMemo, useState, type CSSProperties, type ReactNode } from "react";
 import type { AppConfig, TableCatalogEntry } from "../types";
 import { defaultAliasFor } from "../lib/sqlEditorOps";
-import { applyTypeMapping, styleFromText } from "./PanelStyleModal";
+import { applyTypeMapping, pkBadgeResolved, styleFromText } from "./PanelStyleModal";
 
 type Props = {
   config: AppConfig;
@@ -202,6 +202,7 @@ export function SidebarSearch({ config, onPickTable, onPickField }: Props) {
                       ? `${typ}${len != null ? `(${len}${prec ? "," + prec : ""})` : ""}`
                       : "";
                     const typLabel = typRaw ? applyTypeMapping(typRaw, ps.typeMappings) : "";
+                    const pk = isPk ? pkBadgeResolved(ps.primaryKeyBadge) : null;
                     return (
                       <li
                         key={fh.field}
@@ -232,7 +233,7 @@ export function SidebarSearch({ config, onPickTable, onPickField }: Props) {
                               minWidth: 0,
                             }}
                           >
-                            {isPk ? <span style={pkBadge}>PK</span> : null}
+                            {pk ? <span style={pk.boxStyle}>{pk.label}</span> : null}
                             <code style={{ ...fieldNameStyle, ...styleFromText(ps.fieldName) }}>
                               {defaultAliasFor(e.table)}.{highlight(fh.field, q.trim())}
                             </code>
@@ -357,15 +358,5 @@ const typeStyle: CSSProperties = {
   fontFamily: "var(--mono)",
   padding: "0 4px",
   border: "1px solid var(--border)",
-  borderRadius: 3,
-};
-
-const pkBadge: CSSProperties = {
-  fontSize: 9,
-  fontWeight: 700,
-  padding: "1px 4px",
-  background: "rgba(250,204,21,0.15)",
-  color: "#facc15",
-  border: "1px solid rgba(250,204,21,0.4)",
   borderRadius: 3,
 };

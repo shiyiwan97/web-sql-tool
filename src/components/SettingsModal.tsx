@@ -9,16 +9,12 @@ import {
 } from "react";
 import type {
   AppConfig,
-  DdsCopybookPathGroup,
   EditorAppearance,
-  SqlSnippet,
   SqlCompressLevel,
   UiTheme,
 } from "../types";
 import { normalizeConfig } from "../lib/configDefaults";
 import { applySqlFormatting } from "../lib/sqlEditorOps";
-import { saveFileHandle } from "../lib/fsHandleStore";
-import { analyzeSchemaCatalogFromCsvHandle } from "../lib/schemaCatalogBrowser";
 import { getOrCreateUserId, setUserId } from "../lib/configBlocks";
 
 type Props = {
@@ -29,22 +25,7 @@ type Props = {
   focusJsonTick?: number;
 };
 
-type SectionId =
-  | "basic"
-  | "editor"
-  | "paths"
-  | "relations"
-  | "sqlfmt"
-  | "snippets"
-  | "json";
-
-function newSnippet(): SqlSnippet {
-  return {
-    id: `snip-${globalThis.crypto?.randomUUID?.() ?? String(Date.now())}`,
-    name: "",
-    text: "",
-  };
-}
+type SectionId = "basic" | "editor" | "warnings" | "json";
 
 const FORMAT_PREVIEW_SAMPLE =
   "SELECT  col1,  col2,  col3\nFROM  LIB.T1  t\nWHERE  t.ID = 'x'";
@@ -232,6 +213,12 @@ function EditorAppearanceEditor({
         (v) => onChange({ ...value, activeLineNumberFg: v }),
         "#facc15 等",
       )}
+      {colorRow(
+        "普通行号 颜色",
+        value.lineNumberFg,
+        (v) => onChange({ ...value, lineNumberFg: v }),
+        "#858585 等",
+      )}
     </div>
   );
 }
@@ -245,23 +232,10 @@ export function SettingsModal({
 }: Props) {
   const [draft, setDraft] = useState<AppConfig>(config);
   const [jsonText, setJsonText] = useState("");
-  const [schemaReports, setSchemaReports] = useState<
-    Record<
-      number,
-      {
-        ok: boolean;
-        summary: string;
-        issues: Array<{ line: number; kind: string; message: string }>;
-      }
-    >
-  >({});
   const [openSections, setOpenSections] = useState<Record<SectionId, boolean>>({
     basic: true,
-    editor: false,
-    paths: true,
-    relations: true,
-    sqlfmt: true,
-    snippets: false,
+    editor: true,
+    warnings: true,
     json: false,
   });
 
@@ -308,135 +282,6 @@ export function SettingsModal({
   }, [open, onClose]);
 
   if (!open) return null;
-
-  const setGroups = (g: DdsCopybookPathGroup[]) =>
-    setDraft((d) => ({ ...d, ddsCopybookPathGroups: g }));
-
-  const moveGroup = (idx: number, dir: -1 | 1) => {
-    const g = [...draft.ddsCopybookPathGroups];
-    const j = idx + dir;
-    if (j < 0 || j >= g.length) return;
-    [g[idx], g[j]] = [g[j], g[idx]];
-    setGroups(g.map((x, i) => ({ ...x, order: i })));
-  };
-
-  const removeGroup = (idx: number) => {
-    if (draft.ddsCopybookPathGroups.length <= 1) return;
-    setGroups(
-      draft.ddsCopybookPathGroups
-        .filter((_, i) => i !== idx)
-        .map((x, i) => ({ ...x, order: i })),
-    );
-  };
-
-  const pickSchemaCsv = async (groupIndex: number) => {
-    if (!("showOpenFilePicker" in window)) {
-      alert("当前浏览器不支持文件选择（File System Access API）。请使用 Chromium 内核浏览器。");
-      return;
-    }
-    try {
-      const [handle] = await (window as any).showOpenFilePicker({
-        multiple: false,
-        types: [{ description: "Schema CSV", accept: { "text/csv": [".csv"] } }],
-      });
-      if (!handle) return;
-      const key = `file-schema-csv-${groupIndex}`;
-      await saveFileHandle(key, handle);
-      setGroups(
-        draft.ddsCopybookPathGroups.map((g, i) =>
-          i === groupIndex
-            ? {
-                ...g,
-                schemaCsvPath: handle.name ?? g.schemaCsvPath,
-                schemaCsvFileHandleKey: key,
-              }
-            : g,
-        ),
-      );
-    } catch (e) {
-      if (e instanceof DOMException && e.name === "AbortError") return;
-      alert(`选择 CSV 失败：${e instanceof Error ? e.message : String(e)}`);
-    }
-  };
-
-  const parseGroup = async (groupIndex: number) => {
-    const g = draft.ddsCopybookPathGroups[groupIndex];
-    if (!g) return;
-    if (!g.schemaCsvFileHandleKey) {
-      alert("请先为该组选择 Schema CSV 文件。");
-      return;
-    }
-    try {
-      const { schemas, report } = await analyzeSchemaCatalogFromCsvHandle({
-        schemaCsvFileHandleKey: g.schemaCsvFileHandleKey,
-      });
-      // 合并进 tableCatalog（同名表以靠前组为准：这里只追加不存在的）
-      setDraft((d) => {
-        const existing = new Set(d.tableCatalog.map((t) => t.table.toUpperCase()));
-        const add = schemas
-          .filter((s) => !existing.has(s.table.toUpperCase()))
-          .map((s) => ({
-            table: s.table,
-            qualifiedName: s.qualifiedName,
-            comment: s.comment,
-            fields: s.fields,
-            primaryKeys: s.primaryKeys,
-            fieldInfo: s.fieldInfo,
-          }));
-        return { ...d, tableCatalog: [...d.tableCatalog, ...add] };
-      });
-      setSchemaReports((m) => ({
-        ...m,
-        [groupIndex]: {
-          ok: report.issues.length === 0,
-          summary: `表 ${report.tables} · 字段 ${report.fields} · 数据行 ${report.rows}/${report.lines} · 主键标记 ${report.primaryKeyMarks} · 重复 ${report.duplicates} · 问题 ${report.issues.length}`,
-          issues: report.issues.map((it) => ({
-            line: it.line,
-            kind: it.kind,
-            message: it.message,
-          })),
-        },
-      }));
-    } catch (e) {
-      setSchemaReports((m) => ({
-        ...m,
-        [groupIndex]: {
-          ok: false,
-          summary: `解析失败：${e instanceof Error ? e.message : String(e)}`,
-          issues: [],
-        },
-      }));
-    }
-  };
-
-  const addGroup = () => {
-    setGroups([
-      ...draft.ddsCopybookPathGroups,
-      {
-        order: draft.ddsCopybookPathGroups.length,
-        schemaCsvPath: "",
-        pairing: { ddsSuffix: ".dds", copybookSuffix: ".cbl" },
-      },
-    ]);
-  };
-
-  const mergeRelationStub = () => {
-    const p =
-      draft.tableRelationSourcePath?.trim() ||
-      "D:\\config\\table-relations\\";
-    setDraft((d) => ({
-      ...d,
-      tableRelationSourcePath: p,
-      relationIndex: {
-        byTable: {
-          GRADECLS: { source: p, files: ["GRADECLS.json"] },
-          STUDENT: { source: p, files: ["STUDENT.json"] },
-        },
-        mergedAt: new Date().toISOString(),
-        note: "演示桩：实现阶段由扫描路径生成",
-      },
-    }));
-  };
 
   const refreshJsonPreview = () => {
     setJsonText(JSON.stringify(draft, null, 2));
@@ -520,7 +365,7 @@ export function SettingsModal({
           </AccordionSection>
 
           <AccordionSection
-            title="2. 编辑器外观"
+            title="2. 编辑器设置"
             expanded={openSections.editor}
             onToggle={() => toggle("editor")}
           >
@@ -528,174 +373,7 @@ export function SettingsModal({
               value={draft.editorAppearance}
               onChange={(ea) => setDraft((d) => ({ ...d, editorAppearance: ea }))}
             />
-          </AccordionSection>
 
-          <AccordionSection
-            title="3. Schema CSV 路径组（有序）"
-            expanded={openSections.paths}
-            onToggle={() => toggle("paths")}
-          >
-            <p style={hint}>
-              每组绑定一个 <code>schema.csv</code>（格式见 <code>tutorial.MD</code>）；多组时同名表以列表靠前为准。浏览器端仅保存路径字符串。
-              CSV 文件句柄（用于读取）会保存在 IndexedDB，不会进入导出 JSON。
-            </p>
-            <ol
-              style={{
-                margin: 0,
-                paddingLeft: 22,
-                display: "flex",
-                flexDirection: "column",
-                gap: 12,
-              }}
-            >
-              {draft.ddsCopybookPathGroups.map((g, idx) => (
-                <li key={idx} style={liBox}>
-                  <span style={lbl}>排序 #{idx + 1}</span>
-                  <div style={row2}>
-                    <div style={{ minWidth: 0 }}>
-                      <label style={lbl2}>Schema CSV</label>
-                      <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
-                        <input
-                          style={{ ...inp, flex: 1 }}
-                          value={g.schemaCsvPath}
-                          onChange={(e) => {
-                            const v = e.target.value;
-                            setGroups(
-                              draft.ddsCopybookPathGroups.map((x, i) =>
-                                i === idx ? { ...x, schemaCsvPath: v } : x,
-                              ),
-                            );
-                          }}
-                        />
-                        <button type="button" style={btnSm} onClick={() => pickSchemaCsv(idx)}>
-                          选择…
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-                  <div
-                    style={{
-                      display: "flex",
-                      gap: 6,
-                      marginTop: 10,
-                      flexWrap: "wrap",
-                    }}
-                  >
-                    <button type="button" style={btnSm} onClick={() => parseGroup(idx)}>
-                      解析该组
-                    </button>
-                    <button
-                      type="button"
-                      style={btnSm}
-                      onClick={() => moveGroup(idx, -1)}
-                    >
-                      上移
-                    </button>
-                    <button
-                      type="button"
-                      style={btnSm}
-                      onClick={() => moveGroup(idx, 1)}
-                    >
-                      下移
-                    </button>
-                    <button
-                      type="button"
-                      style={{
-                        ...btnSm,
-                        color: "var(--danger-muted)",
-                        borderColor: "rgba(239,68,68,0.5)",
-                      }}
-                      onClick={() => removeGroup(idx)}
-                    >
-                      删除组
-                    </button>
-                  </div>
-                  {schemaReports[idx] ? (
-                    <div
-                      style={{
-                        marginTop: 10,
-                        padding: 10,
-                        borderRadius: 8,
-                        border: `1px solid ${schemaReports[idx]!.ok ? "rgba(34,197,94,0.4)" : "rgba(239,68,68,0.4)"}`,
-                        background: "var(--bg-app)",
-                        fontSize: 11,
-                        lineHeight: 1.55,
-                      }}
-                    >
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          gap: 8,
-                          fontWeight: 600,
-                          color: schemaReports[idx]!.ok ? "var(--text)" : "var(--danger-muted)",
-                          marginBottom: schemaReports[idx]!.issues.length ? 8 : 0,
-                        }}
-                      >
-                        <span>{schemaReports[idx]!.ok ? "✅ 解析完成（无问题）" : `⚠ 发现 ${schemaReports[idx]!.issues.length} 个问题`}</span>
-                        <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>· {schemaReports[idx]!.summary}</span>
-                      </div>
-                      {schemaReports[idx]!.issues.length > 0 ? (
-                        <div
-                          style={{
-                            maxHeight: 220,
-                            overflow: "auto",
-                            border: "1px solid var(--border)",
-                            borderRadius: 6,
-                            background: "var(--bg-panel)",
-                          }}
-                        >
-                          <table
-                            style={{
-                              width: "100%",
-                              borderCollapse: "collapse",
-                              fontSize: 11,
-                            }}
-                          >
-                            <thead>
-                              <tr style={{ background: "var(--bg-elevated)", textAlign: "left", color: "var(--text-muted)" }}>
-                                <th style={{ padding: "4px 8px", fontWeight: 600, width: 60 }}>行</th>
-                                <th style={{ padding: "4px 8px", fontWeight: 600, width: 110 }}>类型</th>
-                                <th style={{ padding: "4px 8px", fontWeight: 600 }}>说明</th>
-                              </tr>
-                            </thead>
-                            <tbody>
-                              {schemaReports[idx]!.issues.map((it, i2) => (
-                                <tr key={i2} style={{ borderTop: "1px solid var(--border)" }}>
-                                  <td style={{ padding: "4px 8px", fontFamily: "var(--mono)", color: "var(--text-muted)" }}>
-                                    L{it.line}
-                                  </td>
-                                  <td style={{ padding: "4px 8px", color: "var(--danger-muted)" }}>{it.kind}</td>
-                                  <td style={{ padding: "4px 8px" }}>{it.message}</td>
-                                </tr>
-                              ))}
-                            </tbody>
-                          </table>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </li>
-              ))}
-            </ol>
-            <button
-              type="button"
-              style={{ ...btn, marginTop: 12 }}
-              onClick={addGroup}
-            >
-              ＋ 添加路径组
-            </button>
-          </AccordionSection>
-
-          <AccordionSection
-            title="4. 表关系"
-            expanded={openSections.relations}
-            onToggle={() => toggle("relations")}
-          >
-            <p style={hint}>
-              表关系数量通常很多，为避免「设置」变成大表单，关系编辑已移动到侧边栏的
-              <b>「表关系」</b>面板中（可拖拽停靠到左右侧边栏）。
-            </p>
             <div
               style={{
                 marginTop: 16,
@@ -703,247 +381,326 @@ export function SettingsModal({
                 borderTop: "1px solid var(--border)",
               }}
             >
-              <label style={lbl2}>表关系外部配置路径（可选）</label>
-              <input
-                style={inp}
-                placeholder="目录或文件路径"
-                value={draft.tableRelationSourcePath ?? ""}
-                onChange={(e) =>
-                  setDraft((d) => ({
-                    ...d,
-                    tableRelationSourcePath: e.target.value || null,
-                  }))
-                }
-              />
-              <button
-                type="button"
-                style={{ ...btnSm, marginTop: 10 }}
-                onClick={mergeRelationStub}
-              >
-                扫描路径并合并到配置（演示桩）
-              </button>
-            </div>
-          </AccordionSection>
-
-          <AccordionSection
-            title="5. SQL 行长与总长度"
-            expanded={openSections.sqlfmt}
-            onToggle={() => toggle("sqlfmt")}
-          >
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns:
-                  "repeat(auto-fit, minmax(min(100%, 140px), 1fr))",
-                gap: 12,
-                minWidth: 0,
-              }}
-            >
-              <div style={{ minWidth: 0 }}>
-                <label style={lbl2}>每行最大字符</label>
-                <input
-                  style={inp}
-                  type="number"
-                  min={40}
-                  max={256}
-                  value={draft.sqlFormatting.maxCharsPerLine}
-                  onChange={(e) =>
-                    setDraft((d) => ({
-                      ...d,
-                      sqlFormatting: {
-                        ...d.sqlFormatting,
-                        maxCharsPerLine: Number(e.target.value) || 72,
-                      },
-                    }))
-                  }
-                />
+              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 10 }}>
+                SQL 行长与编辑器行为
               </div>
-              <div style={{ minWidth: 0 }}>
-                <label style={lbl2}>行长竖线（编辑器）</label>
-                <select
-                  style={inp}
-                  value={draft.sqlFormatting.showColumnGuide ? "y" : "n"}
-                  onChange={(e) =>
-                    setDraft((d) => ({
-                      ...d,
-                      sqlFormatting: {
-                        ...d.sqlFormatting,
-                        showColumnGuide: e.target.value === "y",
-                      },
-                    }))
-                  }
-                >
-                  <option value="y">显示</option>
-                  <option value="n">不显示</option>
-                </select>
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <label style={lbl2}>换行设置</label>
-                <select
-                  style={inp}
-                  value={draft.sqlFormatting.editorLineBreak}
-                  onChange={(e) => {
-                    const v = e.target.value === "hard" ? "hard" : "soft";
-                    setDraft((d) => ({
-                      ...d,
-                      sqlFormatting: { ...d.sqlFormatting, editorLineBreak: v },
-                    }));
-                  }}
-                >
-                  <option value="soft">软换行</option>
-                  <option value="hard">硬换行</option>
-                </select>
-              </div>
-              <div style={{ minWidth: 0 }}>
-                <label style={lbl2}>压缩等级（与主界面同步）</label>
-                <select
-                  style={inp}
-                  value={String(draft.sqlFormatting.compressLevel)}
-                  onChange={(e) => {
-                    const v = Number(e.target.value);
-                    const level = (v === 2 ? 2 : v === 1 ? 1 : 0) as SqlCompressLevel;
-                    setDraft((d) => ({
-                      ...d,
-                      sqlFormatting: { ...d.sqlFormatting, compressLevel: level },
-                    }));
-                  }}
-                >
-                  <option value="0">0 不压缩</option>
-                  <option value="1">1 轻微</option>
-                  <option value="2">2 强力</option>
-                </select>
-              </div>
-            </div>
-            <p style={{ ...hint, marginTop: 10 }}>
-              「每行最大字符」对<strong>复制</strong>、快捷键复制、工具栏<strong>重排</strong>均生效。复制与快捷键保存到已存 SQL 时会去掉 <code>--</code> 与 <code>/* */</code> 注释。
-              开启「行长竖线」时，编辑器在该列绘制参考线。AS400
-              满行衔接时会在下一行行首补空格以防终端拼行。
-            </p>
-
-            <div style={{ marginTop: 12 }}>
-              <label style={lbl2}>Debug 模式</label>
-              <select
-                style={inp}
-                value={draft.debugMode ? "y" : "n"}
-                onChange={(e) =>
-                  setDraft((d) => ({ ...d, debugMode: e.target.value === "y" }))
-                }
-              >
-                <option value="n">关闭（仅显示当前块与行列）</option>
-                <option value="y">开启（显示完整提示信息）</option>
-              </select>
-              <div style={{ ...hint, marginTop: 6 }}>
-                开启后，编辑器顶部状态栏会显示更完整的说明文字，便于排查交互/快捷键问题。
-              </div>
-            </div>
-            <div style={{ marginTop: 14 }}>
-              <label style={lbl2}>压缩等级预览（固定样例 SQL）</label>
               <div
                 style={{
                   display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-                  gap: 10,
-                  marginTop: 8,
+                  gridTemplateColumns:
+                    "repeat(auto-fit, minmax(min(100%, 140px), 1fr))",
+                  gap: 12,
+                  minWidth: 0,
                 }}
               >
-                {compressPreviews.map((text, i) => (
-                  <div key={i} style={{ minWidth: 0 }}>
-                    <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>
-                      等级 {i}
+                <div style={{ minWidth: 0 }}>
+                  <label style={lbl2}>每行最大字符</label>
+                  <input
+                    style={inp}
+                    type="number"
+                    min={40}
+                    max={256}
+                    value={draft.sqlFormatting.maxCharsPerLine}
+                    onChange={(e) =>
+                      setDraft((d) => ({
+                        ...d,
+                        sqlFormatting: {
+                          ...d.sqlFormatting,
+                          maxCharsPerLine: Number(e.target.value) || 72,
+                        },
+                      }))
+                    }
+                  />
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <label style={lbl2}>行长竖线（编辑器）</label>
+                  <select
+                    style={inp}
+                    value={draft.sqlFormatting.showColumnGuide ? "y" : "n"}
+                    onChange={(e) =>
+                      setDraft((d) => ({
+                        ...d,
+                        sqlFormatting: {
+                          ...d.sqlFormatting,
+                          showColumnGuide: e.target.value === "y",
+                        },
+                      }))
+                    }
+                  >
+                    <option value="y">显示</option>
+                    <option value="n">不显示</option>
+                  </select>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <label style={lbl2}>换行设置</label>
+                  <select
+                    style={inp}
+                    value={draft.sqlFormatting.editorLineBreak}
+                    onChange={(e) => {
+                      const v = e.target.value === "hard" ? "hard" : "soft";
+                      setDraft((d) => ({
+                        ...d,
+                        sqlFormatting: { ...d.sqlFormatting, editorLineBreak: v },
+                      }));
+                    }}
+                  >
+                    <option value="soft">软换行</option>
+                    <option value="hard">硬换行</option>
+                  </select>
+                </div>
+                <div style={{ minWidth: 0 }}>
+                  <label style={lbl2}>压缩等级（与主界面同步）</label>
+                  <select
+                    style={inp}
+                    value={String(draft.sqlFormatting.compressLevel)}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      const level = (v === 2 ? 2 : v === 1 ? 1 : 0) as SqlCompressLevel;
+                      setDraft((d) => ({
+                        ...d,
+                        sqlFormatting: { ...d.sqlFormatting, compressLevel: level },
+                      }));
+                    }}
+                  >
+                    <option value="0">0 不压缩</option>
+                    <option value="1">1 轻微</option>
+                    <option value="2">2 强力</option>
+                  </select>
+                </div>
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    gridColumn: "1 / -1",
+                    fontSize: 11,
+                    color: "var(--text)",
+                    cursor: "pointer",
+                    userSelect: "none",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={draft.sqlFormatting.searchInsertKeywordsUppercase}
+                    onChange={(e) =>
+                      setDraft((d) => ({
+                        ...d,
+                        sqlFormatting: {
+                          ...d.sqlFormatting,
+                          searchInsertKeywordsUppercase: e.target.checked,
+                        },
+                      }))
+                    }
+                  />
+                  搜索侧栏点击插入表/字段时，SQL 关键字使用大写（SELECT / FROM / LEFT JOIN / ON）
+                </label>
+              </div>
+              <p style={{ ...hint, marginTop: 10 }}>
+                「每行最大字符」对<strong>复制</strong>、快捷键复制、工具栏<strong>重排</strong>均生效；开启<strong>硬换行</strong>时，从搜索插入超长 JOIN 后会自动按行长拆行。
+                Schema CSV 导入已迁至<strong>查看表 → 导入</strong>。
+                复制与快捷键保存到已存 SQL 时会去掉 <code>--</code> 与 <code>/* */</code> 注释。
+                开启「行长竖线」时，编辑器在该列绘制参考线。AS400
+                满行衔接时会在下一行行首补空格以防终端拼行。
+              </p>
+
+              <div style={{ marginTop: 12 }}>
+                <label style={lbl2}>Debug 模式</label>
+                <select
+                  style={inp}
+                  value={draft.debugMode ? "y" : "n"}
+                  onChange={(e) =>
+                    setDraft((d) => ({ ...d, debugMode: e.target.value === "y" }))
+                  }
+                >
+                  <option value="n">关闭（仅显示当前块与行列）</option>
+                  <option value="y">开启（显示完整提示信息）</option>
+                </select>
+                <div style={{ ...hint, marginTop: 6 }}>
+                  开启后，编辑器顶部状态栏会显示更完整的说明文字，便于排查交互/快捷键问题。
+                </div>
+              </div>
+              <div style={{ marginTop: 14 }}>
+                <label style={lbl2}>压缩等级预览（固定样例 SQL）</label>
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+                    gap: 10,
+                    marginTop: 8,
+                  }}
+                >
+                  {compressPreviews.map((text, i) => (
+                    <div key={i} style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 10, color: "var(--text-muted)", marginBottom: 4 }}>
+                        等级 {i}
+                      </div>
+                      <pre
+                        style={{
+                          margin: 0,
+                          padding: 8,
+                          fontSize: 10,
+                          fontFamily: "var(--mono)",
+                          background: "var(--bg-app)",
+                          border: "1px solid var(--border)",
+                          borderRadius: 6,
+                          whiteSpace: "pre-wrap",
+                          wordBreak: "break-word",
+                          maxHeight: 160,
+                          overflow: "auto",
+                        }}
+                      >
+                        {text}
+                      </pre>
                     </div>
-                    <pre
-                      style={{
-                        margin: 0,
-                        padding: 8,
-                        fontSize: 10,
-                        fontFamily: "var(--mono)",
-                        background: "var(--bg-app)",
-                        border: "1px solid var(--border)",
-                        borderRadius: 6,
-                        whiteSpace: "pre-wrap",
-                        wordBreak: "break-word",
-                        maxHeight: 160,
-                        overflow: "auto",
-                      }}
-                    >
-                      {text}
-                    </pre>
-                  </div>
-                ))}
+                  ))}
+                </div>
               </div>
             </div>
           </AccordionSection>
 
           <AccordionSection
-            title="6. SQL 片段（本地）"
-            expanded={openSections.snippets}
-            onToggle={() => toggle("snippets")}
+            title="3. 警告设置"
+            expanded={openSections.warnings}
+            onToggle={() => toggle("warnings")}
           >
-            <p style={hint}>
-              常用语句存配置 JSON，便于与团队共享。插入编辑器功能可后续再接侧栏。
+            <p style={{ ...hint, marginTop: 0, marginBottom: 12 }}>
+              以下开关控制编辑器内 JOIN 相关波浪线与底部汇总、以及「调整位置」无效光标提示是否启用；JOIN
+              阈值仅在对应警告开启时生效。
             </p>
-            {draft.sqlSnippets.map((sn) => (
-              <div key={sn.id} style={{ ...relBox, marginBottom: 10 }}>
-                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 8 }}>
-                  <input
-                    style={{ ...inp, flex: "1 1 140px" }}
-                    placeholder="显示名称"
-                    value={sn.name}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      setDraft((d) => ({
-                        ...d,
-                        sqlSnippets: d.sqlSnippets.map((x) =>
-                          x.id === sn.id ? { ...x, name: v } : x,
-                        ),
-                      }));
-                    }}
-                  />
-                  <button
-                    type="button"
-                    style={{ ...btnSm, color: "var(--danger-muted)" }}
-                    onClick={() =>
-                      setDraft((d) => ({
-                        ...d,
-                        sqlSnippets: d.sqlSnippets.filter((x) => x.id !== sn.id),
-                      }))
-                    }
-                  >
-                    删除
-                  </button>
-                </div>
-                <textarea
-                  style={{ ...ta, minHeight: 72 }}
-                  placeholder="SQL 正文"
-                  value={sn.text}
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    setDraft((d) => ({
-                      ...d,
-                      sqlSnippets: d.sqlSnippets.map((x) =>
-                        x.id === sn.id ? { ...x, text: v } : x,
-                      ),
-                    }));
-                  }}
-                />
-              </div>
-            ))}
-            <button
-              type="button"
-              style={btn}
-              onClick={() =>
-                setDraft((d) => ({
-                  ...d,
-                  sqlSnippets: [...d.sqlSnippets, newSnippet()],
-                }))
-              }
+
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 8,
+                marginBottom: 10,
+                fontSize: 12,
+                color: "var(--text)",
+                cursor: "pointer",
+                userSelect: "none",
+              }}
             >
-              ＋ 新建片段
-            </button>
+              <input
+                type="checkbox"
+                checked={draft.sqlDiagnosticsSettings.enableJoinLargeDrivingSmallWarning}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d,
+                    sqlDiagnosticsSettings: {
+                      ...d.sqlDiagnosticsSettings,
+                      enableJoinLargeDrivingSmallWarning: e.target.checked,
+                    },
+                  }))
+                }
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                <strong>JOIN 顺序（大表驱动小表）</strong>
+                <span style={{ display: "block", fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
+                  书写顺序为左侧表 JOIN 右侧表，且两侧均在「查看表」登记了估计行数、左侧大于右侧并达到下限时提示。
+                </span>
+              </span>
+            </label>
+
+            <div style={{ marginLeft: 22, marginBottom: 14, minWidth: 0, maxWidth: 360 }}>
+              <label style={lbl2}>左侧表估计行数下限</label>
+              <input
+                style={{ ...inp, opacity: draft.sqlDiagnosticsSettings.enableJoinLargeDrivingSmallWarning ? 1 : 0.45 }}
+                type="number"
+                min={0}
+                step={1000}
+                disabled={!draft.sqlDiagnosticsSettings.enableJoinLargeDrivingSmallWarning}
+                value={draft.sqlDiagnosticsSettings.joinLargeDrivingSmallMinRows}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d,
+                    sqlDiagnosticsSettings: {
+                      ...d.sqlDiagnosticsSettings,
+                      joinLargeDrivingSmallMinRows: Math.max(
+                        0,
+                        Math.floor(Number(e.target.value) || 0),
+                      ),
+                    },
+                  }))
+                }
+              />
+              <p style={{ ...hint, marginTop: 6, marginBottom: 0 }}>
+                填 <strong>0</strong> 表示不设下限（只要左侧大于右侧即提示）。
+              </p>
+            </div>
+
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 8,
+                marginBottom: 0,
+                fontSize: 12,
+                color: "var(--text)",
+                cursor: "pointer",
+                userSelect: "none",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={draft.sqlDiagnosticsSettings.enableJoinOnConfigMismatchWarning}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d,
+                    sqlDiagnosticsSettings: {
+                      ...d.sqlDiagnosticsSettings,
+                      enableJoinOnConfigMismatchWarning: e.target.checked,
+                    },
+                  }))
+                }
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                <strong>JOIN ON 与配置表关系不一致</strong>
+                <span style={{ display: "block", fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
+                  已配置的两表关系存在时，将 SQL 中的 ON 与配置生成的条件比对，不一致则提示。
+                </span>
+              </span>
+            </label>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 8,
+                marginBottom: 14,
+                marginTop: 4,
+                fontSize: 12,
+                color: "var(--text)",
+                cursor: "pointer",
+                userSelect: "none",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={draft.sqlDiagnosticsSettings.showRepositionInvalidCursorHint !== false}
+                onChange={(e) =>
+                  setDraft((d) => ({
+                    ...d,
+                    sqlDiagnosticsSettings: {
+                      ...d.sqlDiagnosticsSettings,
+                      showRepositionInvalidCursorHint: e.target.checked,
+                    },
+                  }))
+                }
+                style={{ marginTop: 2 }}
+              />
+              <span>
+                <strong>调整位置：无效光标提示</strong>
+                <span style={{ display: "block", fontSize: 11, color: "var(--text-muted)", marginTop: 4 }}>
+                  用快捷键或状态栏尝试进入「调整位置」时，若光标不在可解析的 FROM/JOIN 表片段或 SELECT
+                  列上，是否在右下角以 VS Code 式通知提示说明（约 12 秒后自动消失）。关闭后可通过本项重新启用；通知内「不再显示」也会关闭此项。
+                </span>
+              </span>
+            </label>
           </AccordionSection>
 
           <AccordionSection
-            title="7. 配置 JSON"
+            title="4. 配置 JSON"
             expanded={openSections.json}
             onToggle={() => toggle("json")}
             sectionRef={jsonBlockRef}
@@ -1064,22 +821,6 @@ const hint: CSSProperties = {
   margin: "0 0 12px 0",
 };
 
-const liBox: CSSProperties = {
-  padding: 12,
-  background: "var(--bg-app)",
-  border: "1px solid var(--border)",
-  borderRadius: 8,
-  listStylePosition: "outside",
-};
-
-const row2: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(auto-fit, minmax(min(100%, 200px), 1fr))",
-  gap: 10,
-  marginTop: 8,
-  minWidth: 0,
-};
-
 const lbl: CSSProperties = {
   fontSize: 10,
   textTransform: "uppercase",
@@ -1128,13 +869,3 @@ const btn: CSSProperties = {
 };
 
 const btnSm: CSSProperties = { ...btn, padding: "4px 10px", fontSize: 11 };
-
-const relBox: CSSProperties = {
-  padding: 12,
-  background: "var(--bg-app)",
-  border: "1px solid var(--border)",
-  borderRadius: 8,
-  marginBottom: 10,
-  fontSize: 12,
-  minWidth: 0,
-};

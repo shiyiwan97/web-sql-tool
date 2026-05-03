@@ -135,7 +135,7 @@ export function MenuBar({
                 setOpen(null);
               }}
             >
-              表配置（查看）…
+              查看表…
             </button>
             <button
               type="button"

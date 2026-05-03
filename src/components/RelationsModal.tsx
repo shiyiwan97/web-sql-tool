@@ -100,7 +100,7 @@ export function RelationsModal({ open, config, onClose, setConfig }: Props) {
           <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
             <div style={{ fontSize: 12, fontWeight: 800 }}>表关系</div>
             <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
-              表/字段下拉支持搜索（字段支持搜索注释）；切换表会自动清空字段对。
+              表/字段下拉支持搜索（字段支持搜索注释）；切换表1仅清空字段1，切换表2仅清空字段2。
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -155,7 +155,7 @@ export function RelationsModal({ open, config, onClose, setConfig }: Props) {
               <div style={{ display: "grid", gap: 12 }}>
                 <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr 140px", gap: 10, alignItems: "end" }}>
                   <div style={{ minWidth: 0 }}>
-                    <label style={lbl}>From 表</label>
+                    <label style={lbl}>表1</label>
                     <SearchableSelect
                       value={active.fromTable}
                       options={tableOptions}
@@ -165,7 +165,12 @@ export function RelationsModal({ open, config, onClose, setConfig }: Props) {
                           ...c,
                           relations: c.relations.map((x) => {
                             if (x.id !== active.id) return x;
-                            const next = { ...x, fromTable: v, fieldPairs: [{ fromField: "", toField: "" }] };
+                            const pairs = x.fieldPairs?.length ? [...x.fieldPairs] : [{ fromField: "", toField: "" }];
+                            const nextPairs = pairs.map((p) => ({
+                              fromField: "",
+                              toField: String(p?.toField ?? ""),
+                            }));
+                            const next = { ...x, fromTable: v, fieldPairs: nextPairs };
                             return { ...next, onClause: rebuildOnClause(next) };
                           }),
                         }))
@@ -173,7 +178,7 @@ export function RelationsModal({ open, config, onClose, setConfig }: Props) {
                     />
                   </div>
                   <div style={{ minWidth: 0 }}>
-                    <label style={lbl}>To 表</label>
+                    <label style={lbl}>表2</label>
                     <SearchableSelect
                       value={active.toTable}
                       options={tableOptions}
@@ -183,7 +188,12 @@ export function RelationsModal({ open, config, onClose, setConfig }: Props) {
                           ...c,
                           relations: c.relations.map((x) => {
                             if (x.id !== active.id) return x;
-                            const next = { ...x, toTable: v, fieldPairs: [{ fromField: "", toField: "" }] };
+                            const pairs = x.fieldPairs?.length ? [...x.fieldPairs] : [{ fromField: "", toField: "" }];
+                            const nextPairs = pairs.map((p) => ({
+                              fromField: String(p?.fromField ?? ""),
+                              toField: "",
+                            }));
+                            const next = { ...x, toTable: v, fieldPairs: nextPairs };
                             return { ...next, onClause: rebuildOnClause(next) };
                           }),
                         }))
@@ -242,7 +252,7 @@ export function RelationsModal({ open, config, onClose, setConfig }: Props) {
                     {(active.fieldPairs?.length ? active.fieldPairs : [{ fromField: "", toField: "" }]).map((p, idx) => (
                       <div key={`${active.id}-p-${idx}`} style={{ display: "grid", gridTemplateColumns: "1fr 1fr auto", gap: 10, alignItems: "end" }}>
                         <div style={{ minWidth: 0 }}>
-                          <label style={lbl}>From 字段</label>
+                          <label style={lbl}>字段1</label>
                           <SearchableSelect
                             value={p.fromField ?? ""}
                             disabled={!active.fromTable}
@@ -266,7 +276,7 @@ export function RelationsModal({ open, config, onClose, setConfig }: Props) {
                           />
                         </div>
                         <div style={{ minWidth: 0 }}>
-                          <label style={lbl}>To 字段</label>
+                          <label style={lbl}>字段2</label>
                           <SearchableSelect
                             value={p.toField ?? ""}
                             disabled={!active.toTable}

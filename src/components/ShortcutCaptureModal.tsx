@@ -6,12 +6,28 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { shortcutStringFromKeyboardEvent } from "../lib/shortcutFormat";
+import { shortcutStringFromKeyboardEvent, normalizeShortcutSpec } from "../lib/shortcutFormat";
 
 export type ShortcutConflictEntry = {
   label: string;
   shortcut: string;
 };
+
+function canConfirmShortcut(
+  trimmed: string,
+  initialShortcut: string,
+  existingShortcuts: ShortcutConflictEntry[],
+): boolean {
+  const targetNorm = trimmed ? normalizeShortcutSpec(trimmed) : "";
+  const conflict = targetNorm
+    ? existingShortcuts.find(
+        (e) => e.shortcut && normalizeShortcutSpec(e.shortcut) === targetNorm,
+      )
+    : undefined;
+  const sameAsInitial =
+    !!initialShortcut && targetNorm === normalizeShortcutSpec(initialShortcut);
+  return trimmed.length > 0 && (!conflict || sameAsInitial);
+}
 
 export type ShortcutCaptureModalProps = {
   open: boolean;
@@ -29,24 +45,6 @@ export type ShortcutCaptureModalProps = {
   /** 已占用的其它快捷键（用于冲突检测） */
   existingShortcuts?: ShortcutConflictEntry[];
 };
-
-function normalizeShortcut(s: string): string {
-  return s
-    .split("+")
-    .map((p) => p.trim().toLowerCase())
-    .filter(Boolean)
-    .map((p) => (p === "control" ? "ctrl" : p === "cmd" || p === "command" ? "meta" : p))
-    .sort((a, b) => {
-      const order = ["ctrl", "alt", "shift", "meta"];
-      const ai = order.indexOf(a);
-      const bi = order.indexOf(b);
-      if (ai >= 0 && bi >= 0) return ai - bi;
-      if (ai >= 0) return -1;
-      if (bi >= 0) return 1;
-      return a.localeCompare(b);
-    })
-    .join("+");
-}
 
 export function ShortcutCaptureModal({
   open,
@@ -72,12 +70,20 @@ export function ShortcutCaptureModal({
   const trySetFromEvent = useCallback((e: KeyboardEvent) => {
     if (e.key === "Escape") {
       e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
       onClose();
       return;
     }
-    if (e.key === "Enter" && liveRef.current.trim()) {
+    if (e.key === "Enter") {
+      const trimmed = liveRef.current.trim();
+      if (!trimmed) return;
       e.preventDefault();
-      // Enter 提交也走冲突检测，由按钮判断
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      if (canConfirmShortcut(trimmed, initialShortcut, existingShortcuts)) {
+        onConfirm(trimmed);
+      }
       return;
     }
     const s = shortcutStringFromKeyboardEvent(e);
@@ -87,7 +93,7 @@ export function ShortcutCaptureModal({
       liveRef.current = s;
       setCaptured(s);
     }
-  }, [onClose]);
+  }, [existingShortcuts, initialShortcut, onClose, onConfirm]);
 
   useEffect(() => {
     if (!open) return;
@@ -100,15 +106,15 @@ export function ShortcutCaptureModal({
   if (!open) return null;
 
   const trimmed = captured.trim();
-  const targetNorm = trimmed ? normalizeShortcut(trimmed) : "";
+  const targetNorm = trimmed ? normalizeShortcutSpec(trimmed) : "";
   const conflict = targetNorm
     ? existingShortcuts.find(
-        (e) => e.shortcut && normalizeShortcut(e.shortcut) === targetNorm,
+        (e) => e.shortcut && normalizeShortcutSpec(e.shortcut) === targetNorm,
       )
     : undefined;
   const sameAsInitial =
-    !!initialShortcut && targetNorm === normalizeShortcut(initialShortcut);
-  const canConfirm = trimmed.length > 0 && (!conflict || sameAsInitial);
+    !!initialShortcut && targetNorm === normalizeShortcutSpec(initialShortcut);
+  const canConfirm = canConfirmShortcut(trimmed, initialShortcut, existingShortcuts);
 
   return (
     <div
@@ -123,7 +129,9 @@ export function ShortcutCaptureModal({
           {title}
         </h2>
         {description ? <div style={hint}>{description}</div> : null}
-        <p style={pressHint}>请直接按下要绑定的组合键（焦点无需在输入框）</p>
+        <p style={pressHint}>
+          请直接按下要绑定的组合键（焦点无需在输入框）；无冲突时可按 Enter 保存。
+        </p>
         <div
           style={previewBox}
           tabIndex={-1}

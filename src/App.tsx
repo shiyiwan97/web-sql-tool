@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Editor from "@monaco-editor/react";
 import type * as Monaco from "monaco-editor";
 import { MenuBar } from "./components/MenuBar";
@@ -9,6 +9,7 @@ import {
   SidebarWidthHandle,
 } from "./components/DockableSidebarLayout";
 import { QuickInsertPanel } from "./components/QuickInsertPanel";
+import { RepositionInvalidCursorToast } from "./components/RepositionInvalidCursorToast";
 import { SavedSqlPanel } from "./components/SavedSqlPanel";
 import { HotkeysSettingsModal } from "./components/HotkeysSettingsModal";
 import { CommandMenuModal } from "./components/CommandMenuModal";
@@ -28,12 +29,17 @@ import {
   type ConfigBlocksMeta,
 } from "./lib/configBlocks";
 import {
+  applyHardWrapLinesOnly,
   applySqlFormatting,
   extractAliasedTables,
   insertFieldIntoSelectAtBlock,
   insertTableWithJoinsAtBlock,
   tableKey,
 } from "./lib/sqlEditorOps";
+import {
+  collectUniqueJoinDriverMessages,
+  computeJoinDriverMarkerOffsets,
+} from "./lib/sqlJoinDriverMarkers";
 import { normalizeConfig } from "./lib/configDefaults";
 import {
   blockIndexAtOffset,
@@ -53,12 +59,26 @@ import {
 } from "./lib/sidebarUiStorage";
 import { shortcutStringToKeyCode } from "./lib/monacoKeybinding";
 import {
+  setSelectionHotkeyCaptureContext,
+} from "./lib/selectionHotkeyCapture";
+import {
   loadSavedSqlSlots,
   persistSavedSqlSlots,
   type SavedSqlSlot,
 } from "./lib/savedSqlStorage";
 import { installMonacoFindWidgetWorkaround } from "./lib/monacoFindWidgetWorkaround";
+import { installTempWordHighlightTest } from "./lib/monacoTempWordHighlight";
+import { normalizeShortcutSpec, shortcutStringFromKeyboardEvent } from "./lib/shortcutFormat";
+import {
+  parseFieldSegments,
+  parseTableSegments,
+  swapSegmentGroupWithNext,
+  swapSegmentGroupWithPrevious,
+  tryRepositionEditorSessionAtOffset,
+  type RepositionEditorSession,
+} from "./lib/sqlReposition";
 import { loadWorkspaceState, saveWorkspaceSql } from "./lib/workspaceStorage";
+import { hoverTableFieldTypeComment, hoverTableTableFieldTypeComment } from "./lib/sqlHoverMarkdown";
 
 const DEFAULT_SQL = `SELECT *
 FROM LIB.STUDENT s
@@ -70,6 +90,46 @@ FROM LIB.STUDENT s
 LEFT JOIN LIB.EXAMSCORE e ON s.STUID = e.STUID
 WHERE e.SUBJECT = 'MATH'
 `;
+
+function readRepositionSessionFromEditor(
+  ed: Monaco.editor.IStandaloneCodeEditor,
+): RepositionEditorSession | null {
+  const model = ed.getModel();
+  const pos = ed.getPosition();
+  if (!model || !pos) return null;
+  return tryRepositionEditorSessionAtOffset(model.getValue(), model.getOffsetAt(pos));
+}
+
+function reparseRepositionSession(
+  full: string,
+  sess: RepositionEditorSession,
+  selectedIndices: number[],
+): RepositionEditorSession | null {
+  const blocks = getSqlBlocks(full);
+  const b = blocks[sess.blockIndex];
+  if (!b) return null;
+  const blockText = full.slice(b.start, b.end);
+  const segments =
+    sess.kind === "table"
+      ? parseTableSegments(blockText, b.start)
+      : parseFieldSegments(blockText, b.start);
+  if (segments.length === 0) return null;
+  const mx = segments.length - 1;
+  const sel = [...new Set(selectedIndices)]
+    .filter((i) => i >= 0 && i <= mx)
+    .sort((a, b) => a - b);
+  if (sel.length === 0) return null;
+  return {
+    ...sess,
+    segments,
+    selected: sel,
+    primary: sel[0]!,
+  };
+}
+
+function sqlHoverRich(value: string): Monaco.IMarkdownString {
+  return { value, isTrusted: true, supportHtml: true };
+}
 
 export default function App() {
   const [bundle, setBundle] = useState<ConfigBundle>(() => loadConfigBundle());
@@ -97,11 +157,244 @@ export default function App() {
   const [curBlock, setCurBlock] = useState({ i: 1, n: 1 });
   const [cursorLc, setCursorLc] = useState({ line: 1, col: 1 });
   const [editorFontSize, setEditorFontSize] = useState(13);
+  /** JOIN 提示条：仅 Ctrl/⌘ 按下且悬停该行时显示手型+下划线 */
+  const [joinIssueHoverIndex, setJoinIssueHoverIndex] = useState<number | null>(null);
+  const [joinIssueModDown, setJoinIssueModDown] = useState(false);
+  const [repositionMode, setRepositionMode] = useState(false);
+  const [repositionSession, setRepositionSession] = useState<RepositionEditorSession | null>(
+    null,
+  );
+  const [repositionInvalidHintOpen, setRepositionInvalidHintOpen] = useState(false);
   const importRef = useRef<HTMLInputElement>(null);
   const editorRef = useRef<Monaco.editor.IStandaloneCodeEditor | null>(null);
   const monacoRef = useRef<typeof Monaco | null>(null);
+  const repositionModeRef = useRef(false);
+  const repositionSessionRef = useRef<RepositionEditorSession | null>(null);
+  const repositionDecoIdsRef = useRef<string[]>([]);
+  const repositionHandleKeyDownRef = useRef<(e: KeyboardEvent) => boolean>(() => false);
   const configRef = useRef(config);
   configRef.current = config;
+
+  repositionModeRef.current = repositionMode;
+  repositionSessionRef.current = repositionSession;
+
+  repositionHandleKeyDownRef.current = (e: KeyboardEvent): boolean => {
+    const ed = editorRef.current;
+    if (!ed?.hasTextFocus()) return false;
+
+    const hk = configRef.current.hotkeys;
+    const matchSpec = (spec: string) => {
+      const p = shortcutStringFromKeyboardEvent(e);
+      if (!p || !spec.trim()) return false;
+      return normalizeShortcutSpec(p) === normalizeShortcutSpec(spec.trim());
+    };
+
+    if (e.key === "Escape" || e.key === "Enter") {
+      if (!repositionModeRef.current) return false;
+      repositionModeRef.current = false;
+      repositionSessionRef.current = null;
+      setRepositionSession(null);
+      setRepositionMode(false);
+      return true;
+    }
+
+    if (matchSpec(hk.repositionActivate)) {
+      const cur = repositionSessionRef.current;
+      if (cur) {
+        repositionSessionRef.current = null;
+        setRepositionSession(null);
+        return true;
+      }
+      const sess = readRepositionSessionFromEditor(ed);
+      if (!sess) {
+        if (
+          configRef.current.sqlDiagnosticsSettings.showRepositionInvalidCursorHint !== false
+        ) {
+          setRepositionInvalidHintOpen(true);
+        }
+        return true;
+      }
+      if (!repositionModeRef.current) {
+        repositionModeRef.current = true;
+        setRepositionMode(true);
+      }
+      repositionSessionRef.current = sess;
+      setRepositionSession(sess);
+      return true;
+    }
+
+    if (!repositionModeRef.current) return false;
+
+    const sess = repositionSessionRef.current;
+    const n = sess?.segments.length ?? 0;
+    const sortedSel = sess ? [...sess.selected].sort((a, b) => a - b) : [];
+    const isContiguous = () => {
+      if (!sess || sortedSel.length === 0) return false;
+      const lo = sortedSel[0]!;
+      const hi = sortedSel[sortedSel.length - 1]!;
+      return sortedSel.length === hi - lo + 1;
+    };
+
+    const applySwap = (
+      nextSql: string,
+      nextSel: number[],
+      session: NonNullable<typeof sess>,
+    ) => {
+      const model = ed.getModel();
+      if (!model) return;
+      const nextSess = reparseRepositionSession(nextSql, session, nextSel);
+      if (!nextSess) return;
+      ed.pushUndoStop();
+      ed.executeEdits("sql-reposition", [
+        {
+          range: model.getFullModelRange(),
+          text: nextSql,
+          forceMoveMarkers: true,
+        },
+      ]);
+      setSql(nextSql);
+      repositionSessionRef.current = nextSess;
+      setRepositionSession(nextSess);
+    };
+
+    const full = ed.getModel()?.getValue() ?? "";
+
+    if (matchSpec(hk.repositionSwapPrev)) {
+      if (sess && isContiguous()) {
+        const l = sortedSel[0]!;
+        const h = sortedSel[sortedSel.length - 1]!;
+        if (l > 0) {
+          const nextSql = swapSegmentGroupWithPrevious(full, sess.segments, l, h);
+          if (nextSql) {
+            const cnt = h - l + 1;
+            const newLo = l - 1;
+            applySwap(nextSql, Array.from({ length: cnt }, (_, i) => newLo + i), sess);
+          }
+        }
+      }
+      return true;
+    }
+
+    if (matchSpec(hk.repositionSwapNext)) {
+      if (sess && isContiguous()) {
+        const l = sortedSel[0]!;
+        const h = sortedSel[sortedSel.length - 1]!;
+        if (h < n - 1) {
+          const nextSql = swapSegmentGroupWithNext(full, sess.segments, l, h);
+          if (nextSql) {
+            const cnt = h - l + 1;
+            const newLo = l + 1;
+            applySwap(nextSql, Array.from({ length: cnt }, (_, i) => newLo + i), sess);
+          }
+        }
+      }
+      return true;
+    }
+
+    if (matchSpec(hk.repositionExtendWithPrev)) {
+      if (sess) {
+        const p = sess.primary;
+        if (p > 0) {
+          const ns = new Set(sess.selected);
+          ns.add(p - 1);
+          const arr = [...ns].sort((a, b) => a - b);
+          setRepositionSession({ ...sess, selected: arr, primary: p - 1 });
+        }
+      }
+      return true;
+    }
+
+    if (matchSpec(hk.repositionExtendWithNext)) {
+      if (sess) {
+        const p = sess.primary;
+        if (p < n - 1) {
+          const ns = new Set(sess.selected);
+          ns.add(p + 1);
+          const arr = [...ns].sort((a, b) => a - b);
+          setRepositionSession({ ...sess, selected: arr, primary: p + 1 });
+        }
+      }
+      return true;
+    }
+
+    if (matchSpec(hk.repositionShrinkRemovePrev)) {
+      if (sess && sortedSel.length > 1) {
+        const removed = sortedSel[0]!;
+        const ns = new Set(sess.selected);
+        ns.delete(removed);
+        const arr = [...ns].sort((a, b) => a - b);
+        const np = sess.primary === removed ? arr[0]! : sess.primary;
+        setRepositionSession({ ...sess, selected: arr, primary: np });
+      }
+      return true;
+    }
+
+    if (matchSpec(hk.repositionShrinkRemoveNext)) {
+      if (sess && sortedSel.length > 1) {
+        const removed = sortedSel[sortedSel.length - 1]!;
+        const ns = new Set(sess.selected);
+        ns.delete(removed);
+        const arr = [...ns].sort((a, b) => a - b);
+        const np = sess.primary === removed ? arr[arr.length - 1]! : sess.primary;
+        setRepositionSession({ ...sess, selected: arr, primary: np });
+      }
+      return true;
+    }
+
+    if (matchSpec(hk.repositionSelectPrev)) {
+      if (sess) {
+        const np = Math.max(0, sess.primary - 1);
+        setRepositionSession({ ...sess, primary: np, selected: [np] });
+      }
+      return true;
+    }
+
+    if (matchSpec(hk.repositionSelectNext)) {
+      if (sess) {
+        const np = Math.min(n - 1, sess.primary + 1);
+        setRepositionSession({ ...sess, primary: np, selected: [np] });
+      }
+      return true;
+    }
+
+    // 调整位置模式：Esc / Enter / 激活键已在上方处理；此处仅放行各 reposition 绑定键，其余一律屏蔽（含 Shift+↓、输入字符等）
+    return true;
+  };
+
+  const joinDriverIssues = useMemo(
+    () =>
+      collectUniqueJoinDriverMessages(
+        sql,
+        config.tableCatalog,
+        config.sqlDiagnosticsSettings,
+        config.relations,
+      ),
+    [sql, config.tableCatalog, config.sqlDiagnosticsSettings, config.relations],
+  );
+
+  useEffect(() => {
+    setJoinIssueHoverIndex(null);
+  }, [joinDriverIssues]);
+
+  /** 检测 Ctrl/⌘ 是否按住（用于 JOIN 提示条的可点击态样式） */
+  useEffect(() => {
+    const onDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey) setJoinIssueModDown(true);
+    };
+    const onUp = (e: KeyboardEvent) => {
+      if (!e.ctrlKey && !e.metaKey) setJoinIssueModDown(false);
+    };
+    const onBlur = () => setJoinIssueModDown(false);
+    window.addEventListener("keydown", onDown, true);
+    window.addEventListener("keyup", onUp, true);
+    window.addEventListener("blur", onBlur);
+    return () => {
+      window.removeEventListener("keydown", onDown, true);
+      window.removeEventListener("keyup", onUp, true);
+      window.removeEventListener("blur", onBlur);
+    };
+  }, []);
+
   /** 侧栏插入 SQL 后恢复光标（受控 value 同步会把光标甩到文末） */
   const pendingEditorCursorOffsetRef = useRef<number | null>(null);
   const prevLineBreakRef = useRef<"soft" | "hard">(config.sqlFormatting.editorLineBreak);
@@ -192,6 +485,42 @@ export default function App() {
       });
       return next;
     });
+  }, []);
+
+  const dismissRepositionInvalidHint = useCallback(() => setRepositionInvalidHintOpen(false), []);
+
+  const neverShowRepositionInvalidHint = useCallback(() => {
+    patchConfig((c) => ({
+      ...c,
+      sqlDiagnosticsSettings: {
+        ...c.sqlDiagnosticsSettings,
+        showRepositionInvalidCursorHint: false,
+      },
+    }));
+    setRepositionInvalidHintOpen(false);
+  }, [patchConfig]);
+
+  const toggleRepositionModeFromToolbar = useCallback(() => {
+    const ed = editorRef.current;
+    if (!ed) return;
+    if (repositionModeRef.current) {
+      repositionModeRef.current = false;
+      setRepositionMode(false);
+      repositionSessionRef.current = null;
+      setRepositionSession(null);
+      return;
+    }
+    const sess = readRepositionSessionFromEditor(ed);
+    if (!sess) {
+      if (configRef.current.sqlDiagnosticsSettings.showRepositionInvalidCursorHint !== false) {
+        setRepositionInvalidHintOpen(true);
+      }
+      return;
+    }
+    repositionModeRef.current = true;
+    setRepositionMode(true);
+    repositionSessionRef.current = sess;
+    setRepositionSession(sess);
   }, []);
 
   const openSettings = useCallback(() => setSettingsOpen(true), []);
@@ -477,6 +806,50 @@ export default function App() {
     return () => document.removeEventListener("keydown", onKey, true);
   }, [config.hotkeys.openSettings]);
 
+  // 全局快捷键：打开快捷键设置面板（在编辑器外/内均生效）
+  useEffect(() => {
+    const target = config.hotkeys.openHotkeysSettings || "";
+    if (!target) return;
+    const parts = target.split("+").map((s) => s.trim()).filter(Boolean);
+    const want = {
+      ctrl: parts.some((p) => /^ctrl|control$/i.test(p)),
+      alt: parts.some((p) => /^alt$/i.test(p)),
+      shift: parts.some((p) => /^shift$/i.test(p)),
+      meta: parts.some((p) => /^meta|cmd|command$/i.test(p)),
+      key: parts.find((p) => !/^(ctrl|control|alt|shift|meta|cmd|command)$/i.test(p)) ?? "",
+    };
+    if (!want.key) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey !== want.ctrl) return;
+      if (e.altKey !== want.alt) return;
+      if (e.shiftKey !== want.shift) return;
+      if (e.metaKey !== want.meta) return;
+      const k = want.key.toLowerCase();
+      const hit =
+        e.key.toLowerCase() === k ||
+        (k.length === 1 && e.key === k) ||
+        (k === "," && e.key === ",") ||
+        (k === "." && e.key === ".") ||
+        (k.startsWith("f") && e.key.toLowerCase() === k);
+      if (!hit) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setHotkeysOpen(true);
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [config.hotkeys.openHotkeysSettings]);
+
+  /** Extend/Shrink Selection + 调整位置：捕获阶段（见 selectionHotkeyCapture.ts） */
+  useEffect(() => {
+    setSelectionHotkeyCaptureContext({
+      getEditor: () => editorRef.current,
+      getHotkeys: () => configRef.current.hotkeys,
+      handleRepositionKeyDown: (e) => repositionHandleKeyDownRef.current(e),
+    });
+    return () => setSelectionHotkeyCaptureContext(null);
+  }, []);
+
   // 智能提示：根据 tableCatalog 注册表名 / 字段补全
   useEffect(() => {
     const monaco = monacoRef.current;
@@ -597,22 +970,69 @@ export default function App() {
       return `${info.type}${len}`;
     };
 
-    const tableMarkdown = (t: AppConfig["tableCatalog"][number]): string => {
-      const lines: string[] = [];
-      lines.push(`**Table** \`${t.qualifiedName ?? t.table}\``);
-      if (t.comment) lines.push(`> ${t.comment}`);
-      lines.push(`字段 ${t.fields.length}` + (t.primaryKeys?.length ? ` · 主键 ${t.primaryKeys.join(", ")}` : ""));
-      lines.push("");
-      lines.push("| 字段 | 类型 | 注释 |");
-      lines.push("| --- | --- | --- |");
-      for (const f of t.fields) {
-        const info = t.fieldInfo?.[f.toUpperCase()];
-        const pk = info?.isKey ? "🔑 " : "";
-        const ty = formatType(info) || "—";
-        const cm = (info?.comment ?? "").replace(/\|/g, "\\|");
-        lines.push(`| ${pk}\`${f}\` | \`${ty}\` | ${cm} |`);
+    /** 主键：若登记了 primaryKeys 则只认该列表（避免 fieldInfo.isKey 全员误标） */
+    const catalogFieldIsPk = (
+      entry: AppConfig["tableCatalog"][number],
+      fieldName: string,
+    ): boolean => {
+      const list = entry.primaryKeys;
+      if (list != null && list.length > 0) {
+        return list.some((k) => k.toUpperCase() === fieldName.toUpperCase());
       }
-      return lines.join("\n");
+      return !!entry.fieldInfo?.[fieldName.toUpperCase()]?.isKey;
+    };
+
+    const pkSummaryLine = (entry: AppConfig["tableCatalog"][number]): string | null => {
+      const list = entry.primaryKeys;
+      if (list != null && list.length > 0) {
+        return `键：${list.map((x) => `\`${x}\``).join(", ")}`;
+      }
+      const keys = entry.fields.filter((f) => !!entry.fieldInfo?.[f.toUpperCase()]?.isKey);
+      if (keys.length === 0) return null;
+      return `键：${keys.map((f) => `\`${f}\``).join(", ")}`;
+    };
+
+    /** 表头两行摘要（字段表格之上）；Monaco 中单 \\n 易被当成空格，用 <br/> 强制换行 */
+    const tableHoverSummary = (
+      entry: AppConfig["tableCatalog"][number],
+    ): { line1: string; line2: string | null } => {
+      const name = entry.qualifiedName ?? entry.table;
+      const cm = entry.comment?.trim();
+      const line1 = cm ? `**${name}** · ${cm}` : `**${name}**`;
+
+      const erc = entry.estimatedRowCount;
+      const hasEst =
+        erc != null && typeof erc === "number" && Number.isFinite(erc) && erc >= 0;
+      const estPart = hasEst ? `估计 **${Math.floor(erc).toLocaleString()}** 条` : "";
+      const pkPart = pkSummaryLine(entry);
+      const parts: string[] = [];
+      if (estPart) parts.push(estPart);
+      if (pkPart) parts.push(pkPart);
+      const line2 = parts.length > 0 ? parts.join(" · ") : null;
+      return { line1, line2 };
+    };
+
+    const joinHoverSummaryAndFieldTable = (
+      summary: { line1: string; line2: string | null },
+      tableHtml: string,
+    ): string => {
+      const head =
+        summary.line2 != null
+          ? `${summary.line1}<br/>${summary.line2}`
+          : summary.line1;
+      return `${head}<br/><br/>${tableHtml}`;
+    };
+
+    const tableMarkdown = (t: AppConfig["tableCatalog"][number]): string => {
+      const summary = tableHoverSummary(t);
+      const rows: Array<[boolean, string, string, string]> = t.fields.map((f) => {
+        const info = t.fieldInfo?.[f.toUpperCase()];
+        const isKey = catalogFieldIsPk(t, f);
+        const ty = formatType(info);
+        const cmm = info?.comment ?? "";
+        return [isKey, f, ty, cmm];
+      });
+      return joinHoverSummaryAndFieldTable(summary, hoverTableFieldTypeComment(rows));
     };
 
     const fieldMarkdown = (
@@ -620,13 +1040,34 @@ export default function App() {
       field: string,
     ): string => {
       const info = table.fieldInfo?.[field.toUpperCase()];
-      const ty = formatType(info) || "—";
-      const lines: string[] = [];
-      const pk = info?.isKey ? "🔑 " : "";
-      lines.push(`**${pk}Field** \`${table.table}.${field}\` · \`${ty}\``);
-      if (info?.comment) lines.push(`> ${info.comment}`);
-      else if (table.comment) lines.push(`> 表注释：${table.comment}`);
-      return lines.join("\n");
+      const ty = formatType(info);
+      const isKey = catalogFieldIsPk(table, field);
+      const comment =
+        info?.comment ?? (table.comment ? `（表注释）${table.comment}` : "");
+      const summary = tableHoverSummary(table);
+      const rows: Array<[boolean, string, string, string]> = [[isKey, field, ty, comment]];
+      return joinHoverSummaryAndFieldTable(summary, hoverTableFieldTypeComment(rows));
+    };
+
+    const ambiguousFieldMarkdown = (
+      matches: AppConfig["tableCatalog"],
+      fieldWord: string,
+    ): string => {
+      const slice = matches.slice(0, 8);
+      const rows: Array<[boolean, string, string, string, string]> = slice.map((t) => {
+        const fieldName = t.fields.find((f) => f.toUpperCase() === fieldWord.toUpperCase())!;
+        const info = t.fieldInfo?.[fieldName.toUpperCase()];
+        const isKey = catalogFieldIsPk(t, fieldName);
+        const ty = formatType(info);
+        const cm = info?.comment ?? "";
+        return [isKey, t.table, fieldName, ty, cm];
+      });
+      let out = `**字段 \`${fieldWord}\`**<br/>以下多张表中均包含该字段：<br/><br/>`;
+      out += hoverTableTableFieldTypeComment(rows);
+      if (matches.length > 8) {
+        out += `<br/><br/>_…还有 ${matches.length - 8} 张表含该字段_`;
+      }
+      return out;
     };
 
     const provider = monaco.languages.registerHoverProvider("sql", {
@@ -681,7 +1122,7 @@ export default function App() {
             const fieldName = table.fields.find((f) => f.toUpperCase() === wordU)!;
             return {
               range,
-              contents: [{ value: fieldMarkdown(table, fieldName) }],
+              contents: [sqlHoverRich(fieldMarkdown(table, fieldName))],
             };
           }
         }
@@ -693,7 +1134,7 @@ export default function App() {
           if (table) {
             return {
               range,
-              contents: [{ value: tableMarkdown(table) }],
+              contents: [sqlHoverRich(tableMarkdown(table))],
             };
           }
         }
@@ -706,19 +1147,12 @@ export default function App() {
           if (matches.length === 1 && matches[0]) {
             const t = matches[0];
             const fieldName = t.fields.find((f) => f.toUpperCase() === wordU)!;
-            return { range, contents: [{ value: fieldMarkdown(t, fieldName) }] };
+            return { range, contents: [sqlHoverRich(fieldMarkdown(t, fieldName))] };
           }
-          // 多张表都有该字段：每张一条
-          const blocks = matches.slice(0, 8).map((t) => {
-            const fieldName = t.fields.find((f) => f.toUpperCase() === wordU)!;
-            return { value: fieldMarkdown(t, fieldName) };
-          });
-          if (matches.length > 8) {
-            blocks.push({
-              value: `_…还有 ${matches.length - 8} 张表含 \`${word}\` 字段_`,
-            });
-          }
-          return { range, contents: blocks };
+          return {
+            range,
+            contents: [sqlHoverRich(ambiguousFieldMarkdown(matches, word))],
+          };
         }
 
         return null;
@@ -805,6 +1239,89 @@ export default function App() {
     config.sqlFormatting.editorLineBreak,
     config.sqlFormatting.maxCharsPerLine,
   ]);
+
+  /** JOIN 书写顺序：Monaco 波浪线警告（与「查看表」估计行数联动） */
+  useEffect(() => {
+    const ed = editorRef.current;
+    const monaco = monacoRef.current;
+    const model = ed?.getModel();
+    if (!ed || !monaco || !model || monacoReadyTick === 0) return;
+    const offs = computeJoinDriverMarkerOffsets(
+      sql,
+      config.tableCatalog,
+      config.sqlDiagnosticsSettings,
+      config.relations,
+    );
+    const len = model.getValueLength();
+    const markers = offs.map((o) => {
+      const s = Math.min(Math.max(0, o.start), len);
+      const e = Math.min(Math.max(s, o.end), len);
+      const startPos = model.getPositionAt(s);
+      const endPos = model.getPositionAt(e);
+      return {
+        severity: monaco.MarkerSeverity.Warning,
+        message: o.message,
+        startLineNumber: startPos.lineNumber,
+        startColumn: startPos.column,
+        endLineNumber: endPos.lineNumber,
+        endColumn: endPos.column,
+      };
+    });
+    monaco.editor.setModelMarkers(model, "join-driver", markers);
+    return () => monaco.editor.setModelMarkers(model, "join-driver", []);
+  }, [sql, config.tableCatalog, config.sqlDiagnosticsSettings, config.relations, monacoReadyTick]);
+
+  /** 调整位置：红 / 绿行内高亮 */
+  useEffect(() => {
+    const ed = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!ed || !monaco || monacoReadyTick === 0) return;
+    const model = ed.getModel();
+    if (!model) return;
+
+    let ids = repositionDecoIdsRef.current;
+    const flushClear = () => {
+      ids = ed.deltaDecorations(ids, []);
+      repositionDecoIdsRef.current = ids;
+    };
+
+    if (!repositionMode || !repositionSession?.segments.length) {
+      flushClear();
+      return () => flushClear();
+    }
+
+    const sel = new Set(repositionSession.selected);
+    const decos: Monaco.editor.IModelDeltaDecoration[] = [];
+    for (let i = 0; i < repositionSession.segments.length; i++) {
+      const seg = repositionSession.segments[i]!;
+      const startPos = model.getPositionAt(seg.start);
+      const endPos = model.getPositionAt(seg.end);
+      decos.push({
+        range: new monaco.Range(
+          startPos.lineNumber,
+          startPos.column,
+          endPos.lineNumber,
+          endPos.column,
+        ),
+        options: {
+          inlineClassName: sel.has(i) ? "sql-reposition-focus" : "sql-reposition-peer",
+          stickiness: monaco.editor.TrackedRangeStickiness.NeverGrowsWhenTypingAtEdges,
+        },
+      });
+    }
+    ids = ed.deltaDecorations(ids, decos);
+    repositionDecoIdsRef.current = ids;
+    return () => flushClear();
+  }, [repositionMode, repositionSession, monacoReadyTick, sql]);
+
+  /** TEMP：验证词背景高亮 — 删除 monacoTempWordHighlight.ts、本 effect、index.css 中 `.sql-tool-temp-word-highlight` */
+  useEffect(() => {
+    const ed = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!ed || !monaco || monacoReadyTick === 0) return;
+    const d = installTempWordHighlightTest(ed, monaco);
+    return () => d.dispose();
+  }, [monacoReadyTick]);
 
   useEffect(() => {
     const ed = editorRef.current;
@@ -994,6 +1511,26 @@ export default function App() {
         }),
       );
     }
+
+    disposables.push(
+      editor.addAction({
+        id: "sql-tool-extend-selection",
+        label: "Extend Selection",
+        run: (ed) => {
+          ed.trigger("keyboard", "editor.action.smartSelect.expand", null);
+        },
+      }),
+    );
+    disposables.push(
+      editor.addAction({
+        id: "sql-tool-shrink-selection",
+        label: "Shrink Selection",
+        run: (ed) => {
+          ed.trigger("keyboard", "editor.action.smartSelect.shrink", null);
+        },
+      }),
+    );
+
     for (const qi of config.quickInserts) {
       const code = shortcutStringToKeyCode(monaco, qi.shortcut);
       if (code == null) continue;
@@ -1086,10 +1623,14 @@ export default function App() {
               return;
             }
             const tr = insertTableWithJoinsAtBlock(current, q, config, idx);
+            const nextSql = applyHardWrapLinesOnly(tr.sql, config.sqlFormatting);
             if (tr.cursorOffset !== null) {
-              pendingEditorCursorOffsetRef.current = tr.cursorOffset;
+              pendingEditorCursorOffsetRef.current =
+                config.sqlFormatting.editorLineBreak === "hard"
+                  ? nextSql.length
+                  : tr.cursorOffset;
             }
-            setSql(tr.sql);
+            setSql(nextSql);
           }}
           onPickField={(t, f) => {
             const ed = editorRef.current;
@@ -1099,8 +1640,12 @@ export default function App() {
             const off = model && pos ? model.getOffsetAt(pos) : 0;
             const idx = blockIndexAtOffset(s, off);
             const fr = insertFieldIntoSelectAtBlock(s, t, f, config, idx);
-            pendingEditorCursorOffsetRef.current = fr.cursorOffset;
-            setSql(fr.sql);
+            const wrapped = applyHardWrapLinesOnly(fr.sql, config.sqlFormatting);
+            pendingEditorCursorOffsetRef.current =
+              config.sqlFormatting.editorLineBreak === "hard"
+                ? wrapped.length
+                : fr.cursorOffset;
+            setSql(wrapped);
           }}
         />
       );
@@ -1273,10 +1818,58 @@ export default function App() {
                 Monaco · SQL · 当前块 {curBlock.i}/{curBlock.n}（以分号分隔；复制不含分号）· Ln{" "}
                 {cursorLc.line}, Col {cursorLc.col} · 软换行＝仅视觉折行、行号不变；硬换行＝真实换行、行号增加（「重排」）·
                 Ctrl+滚轮 调字号
+                <button
+                  type="button"
+                  title={
+                    repositionMode
+                      ? "点击退出「调整位置」模式（Esc 也可退出）"
+                      : "光标需在 FROM/JOIN 表片段或 SELECT 列上；否则将提示无法进入"
+                  }
+                  onClick={toggleRepositionModeFromToolbar}
+                  style={{
+                    marginLeft: 10,
+                    padding: "3px 10px",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    borderRadius: 6,
+                    border: `1px solid ${
+                      repositionMode ? "rgba(239,68,68,0.85)" : "var(--border)"
+                    }`,
+                    background: repositionMode ? "rgba(239,68,68,0.42)" : "var(--bg-app)",
+                    color: repositionMode ? "#fecaca" : "var(--text-muted)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {repositionMode ? "调整位置" : "普通模式"}
+                </button>
               </>
             ) : (
               <>
                 当前块 {curBlock.i}/{curBlock.n} · Ln {cursorLc.line}, Col {cursorLc.col}
+                <button
+                  type="button"
+                  title={
+                    repositionMode
+                      ? "点击退出「调整位置」模式（Esc 也可退出）"
+                      : "光标需在 FROM/JOIN 表片段或 SELECT 列上；否则将提示无法进入"
+                  }
+                  onClick={toggleRepositionModeFromToolbar}
+                  style={{
+                    marginLeft: 10,
+                    padding: "3px 10px",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    borderRadius: 6,
+                    border: `1px solid ${
+                      repositionMode ? "rgba(239,68,68,0.85)" : "var(--border)"
+                    }`,
+                    background: repositionMode ? "rgba(239,68,68,0.42)" : "var(--bg-app)",
+                    color: repositionMode ? "#fecaca" : "var(--text-muted)",
+                    cursor: "pointer",
+                  }}
+                >
+                  {repositionMode ? "调整位置" : "普通模式"}
+                </button>
               </>
             )}
           </div>
@@ -1315,6 +1908,56 @@ export default function App() {
               }}
             />
           </div>
+          {joinDriverIssues.length > 0 ? (
+            <div
+              style={{
+                flexShrink: 0,
+                padding: "6px 12px",
+                borderTop: "1px solid var(--border)",
+                background: "rgba(234, 179, 8, 0.09)",
+                fontSize: 12,
+                fontFamily: "var(--monaco-font, ui-monospace, monospace)",
+                color: "var(--text)",
+                lineHeight: 1.5,
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {joinDriverIssues.map((msg, i) => {
+                const linkActive = joinIssueModDown && joinIssueHoverIndex === i;
+                return (
+                <div
+                  key={i}
+                  onMouseEnter={() => setJoinIssueHoverIndex(i)}
+                  onMouseLeave={() =>
+                    setJoinIssueHoverIndex((h) => (h === i ? null : h))
+                  }
+                  style={{
+                    cursor: linkActive ? "pointer" : "default",
+                    textDecoration: linkActive ? "underline" : undefined,
+                    textUnderlineOffset: linkActive ? "2px" : undefined,
+                  }}
+                  onClick={(e) => {
+                    if (!e.ctrlKey && !e.metaKey) return;
+                    const hit = /^line:(\d+)/.exec(msg);
+                    if (!hit) return;
+                    const line = parseInt(hit[1], 10);
+                    const ed = editorRef.current;
+                    if (!ed || line < 1) return;
+                    e.preventDefault();
+                    ed.focus();
+                    const model = ed.getModel();
+                    const max = model ? model.getLineCount() : line;
+                    const ln = Math.min(line, Math.max(1, max));
+                    ed.setPosition({ lineNumber: ln, column: 1 });
+                    ed.revealLineInCenter(ln);
+                  }}
+                >
+                  {msg}
+                </div>
+                );
+              })}
+            </div>
+          ) : null}
         </section>
         <SidebarWidthHandle
           ariaLabel="拖动改变右侧栏宽度"
@@ -1354,6 +1997,12 @@ export default function App() {
       >
         配置保存在 localStorage；「已存 SQL」单独持久化。File 菜单可导入/导出配置 JSON。
       </footer>
+
+      <RepositionInvalidCursorToast
+        open={repositionInvalidHintOpen}
+        onDismiss={dismissRepositionInvalidHint}
+        onNeverShowAgain={neverShowRepositionInvalidHint}
+      />
 
       <SettingsModal
         open={settingsOpen}
@@ -1401,6 +2050,7 @@ export default function App() {
       <TableCatalogModal
         open={tableCatalogOpen}
         config={config}
+        patchConfig={patchConfig}
         onClose={() => setTableCatalogOpen(false)}
         onOpenStyle={() => setPanelStyleTarget("tableCatalog")}
       />

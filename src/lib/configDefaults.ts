@@ -9,17 +9,14 @@ import type {
   QuickInsertEntry,
   QuickInsertPanelStyle,
   SavedSqlPanelStyle,
+  SearchPanelPkBadgeStyle,
   SearchPanelStyle,
   SidebarLayout,
   SqlCompressLevel,
   TableCatalogPanelStyle,
 } from "../types";
 
-let id = 0;
-const rid = () => `rel-${++id}`;
-
 export function createDefaultConfig(): AppConfig {
-  id = 0;
   return {
     version: 1,
     theme: "dark",
@@ -35,50 +32,18 @@ export function createDefaultConfig(): AppConfig {
       description:
         "多组路径按数组顺序解析；同名表以靠前条目为准（浏览器端仅保存路径，不读本地磁盘）。",
     },
-    relations: [
-      {
-        id: rid(),
-        fromTable: "GRADECLS",
-        toTable: "STUDENT",
-        cardinality: "one-to-many",
-        onClause: "GRADECLS.GCLSID = STUDENT.GCLSID",
-        joinKind: "LEFT",
-      },
-      {
-        id: rid(),
-        fromTable: "STUDENT",
-        toTable: "EXAMSCORE",
-        cardinality: "one-to-many",
-        onClause: "STUDENT.STUID = EXAMSCORE.STUID",
-        joinKind: "LEFT",
-      },
-    ],
+    relations: [],
     sqlFormatting: {
       maxCharsPerLine: 72,
       showColumnGuide: false,
       editorLineBreak: "soft",
       compressLevel: 0,
+      searchInsertKeywordsUppercase: true,
     },
     sqlSnippets: [],
     tableRelationSourcePath: null,
     relationIndex: { byTable: {} },
-    tableCatalog: [
-      {
-        table: "GRADECLS",
-        qualifiedName: "LIB.GRADECLS",
-        fields: ["GCLSID", "GRADEYR", "CLASSNM", "ROOMNO"],
-      },
-      {
-        table: "STUDENT",
-        qualifiedName: "LIB.STUDENT",
-        fields: ["STUID", "GCLSID", "STUNM", "GENDER", "BIRTHDT"],
-      },
-      {
-        table: "EXAMSCORE",
-        qualifiedName: "LIB.EXAMSCORE",
-        fields: ["STUID", "EXAMDATE", "SUBJECT", "SCORE", "FULLSCR"],
-      },
-    ],
+    tableCatalog: [],
     sidebarLayout: {
       left: ["search", "savedSql"],
       right: ["quickInsert"],
@@ -97,9 +62,27 @@ export function createDefaultConfig(): AppConfig {
       compressLineOrSelection: "Shift+Backspace",
       compressCurrentBlock: "Ctrl+Shift+Backspace",
       openSettings: "Ctrl+Alt+,",
+      openHotkeysSettings: "Ctrl+Alt+H",
+      extendSelection: "Ctrl+W",
+      shrinkSelection: "Ctrl+Shift+W",
+      repositionActivate: "Ctrl+Shift+M",
+      repositionSelectPrev: "Left",
+      repositionSelectNext: "Right",
+      repositionSwapPrev: "Ctrl+Left",
+      repositionSwapNext: "Ctrl+Right",
+      repositionExtendWithPrev: "Shift+Left",
+      repositionExtendWithNext: "Shift+Right",
+      repositionShrinkRemovePrev: "Alt+Shift+Left",
+      repositionShrinkRemoveNext: "Alt+Shift+Right",
     },
     panelStyles: createDefaultPanelStyles(),
     editorAppearance: createDefaultEditorAppearance(),
+    sqlDiagnosticsSettings: {
+      enableJoinLargeDrivingSmallWarning: true,
+      enableJoinOnConfigMismatchWarning: true,
+      joinLargeDrivingSmallMinRows: 100_000,
+      showRepositionInvalidCursorHint: true,
+    },
   };
 }
 
@@ -108,6 +91,7 @@ export function createDefaultEditorAppearance(): EditorAppearance {
     baseTheme: "auto",
     selectedLineBg: "",
     activeLineNumberFg: "",
+    lineNumberFg: "",
   };
 }
 
@@ -140,6 +124,12 @@ export function createDefaultPanelStyles(): PanelStyles {
     tableItemHeight: 0,
     fieldItemHeight: 0,
     commentWrap: false,
+    primaryKeyBadge: {
+      label: "PK",
+      color: "#facc15",
+      backgroundColor: "rgba(250,204,21,0.15)",
+      borderColor: "rgba(250,204,21,0.4)",
+    },
   };
   const tableCatalog: TableCatalogPanelStyle = {
     tableName: text(13, ""),
@@ -147,6 +137,13 @@ export function createDefaultPanelStyles(): PanelStyles {
     tableComment: text(12, ""),
     fieldComment: text(12, ""),
     fieldType: text(12, ""),
+    primaryKeyBadge: {
+      label: "PK",
+      color: "#facc15",
+      backgroundColor: "rgba(250,204,21,0.15)",
+      borderColor: "rgba(250,204,21,0.4)",
+    },
+    fieldSearchHighlightBg: "rgba(59,130,246,0.14)",
   };
   const quickInsert: QuickInsertPanelStyle = {
     keyInput: box(11, "", 0, 0),
@@ -191,12 +188,10 @@ export function normalizeConfig(raw: unknown): AppConfig {
           fromTable: String(r.fromTable ?? "").toUpperCase(),
           toTable: String(r.toTable ?? "").toUpperCase(),
           fieldPairs: Array.isArray(r.fieldPairs)
-            ? r.fieldPairs
-                .map((p) => ({
-                  fromField: String(p?.fromField ?? "").toUpperCase(),
-                  toField: String(p?.toField ?? "").toUpperCase(),
-                }))
-                .filter((p) => p.fromField && p.toField)
+            ? r.fieldPairs.map((p) => ({
+                fromField: String(p?.fromField ?? "").toUpperCase(),
+                toField: String(p?.toField ?? "").toUpperCase(),
+              }))
             : undefined,
           cardinality: normalizeCardinality(r.cardinality),
           onClause: String(r.onClause ?? ""),
@@ -214,6 +209,10 @@ export function normalizeConfig(raw: unknown): AppConfig {
           : base.sqlFormatting.showColumnGuide,
       editorLineBreak: normalizeEditorLineBreak(sf, base.sqlFormatting.editorLineBreak),
       compressLevel: normalizeCompressLevel(sf, base.sqlFormatting.compressLevel),
+      searchInsertKeywordsUppercase:
+        typeof sf?.searchInsertKeywordsUppercase === "boolean"
+          ? sf.searchInsertKeywordsUppercase
+          : base.sqlFormatting.searchInsertKeywordsUppercase,
     },
     sqlSnippets: normalizeSqlSnippets(o.sqlSnippets, base.sqlSnippets),
     tableResolution:
@@ -241,6 +240,7 @@ export function normalizeConfig(raw: unknown): AppConfig {
           primaryKeys: Array.isArray(t.primaryKeys)
             ? t.primaryKeys.map((f) => String(f).toUpperCase())
             : undefined,
+          estimatedRowCount: normalizeEstimatedRowCount(t.estimatedRowCount),
           fieldInfo: normalizeFieldInfo(t.fieldInfo),
         }))
       : base.tableCatalog,
@@ -249,6 +249,10 @@ export function normalizeConfig(raw: unknown): AppConfig {
     hotkeys: normalizeHotkeys(o.hotkeys, base.hotkeys),
     panelStyles: normalizePanelStyles(o.panelStyles, base.panelStyles),
     editorAppearance: normalizeEditorAppearance(o.editorAppearance, base.editorAppearance),
+    sqlDiagnosticsSettings: normalizeSqlDiagnosticsSettings(
+      (o as Record<string, unknown>).sqlDiagnosticsSettings,
+      base.sqlDiagnosticsSettings,
+    ),
   };
   return merged;
 }
@@ -290,6 +294,17 @@ function normalizeTypeMappings(raw: unknown, fb: SearchPanelStyle["typeMappings"
     .filter((x) => x.from.length > 0);
 }
 
+function normalizePrimaryKeyBadge(raw: unknown, fb: SearchPanelPkBadgeStyle): SearchPanelPkBadgeStyle {
+  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  return {
+    label: typeof o.label === "string" ? o.label : fb.label,
+    color: typeof o.color === "string" ? o.color : fb.color,
+    backgroundColor:
+      typeof o.backgroundColor === "string" ? o.backgroundColor : fb.backgroundColor,
+    borderColor: typeof o.borderColor === "string" ? o.borderColor : fb.borderColor,
+  };
+}
+
 function normalizePanelStyles(raw: unknown, fb: PanelStyles): PanelStyles {
   const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, any>;
   const s = (o.search ?? {}) as Record<string, any>;
@@ -311,6 +326,7 @@ function normalizePanelStyles(raw: unknown, fb: PanelStyles): PanelStyles {
       fieldItemHeight:
         typeof s.fieldItemHeight === "number" ? Math.max(0, s.fieldItemHeight) : fb.search.fieldItemHeight,
       commentWrap: typeof s.commentWrap === "boolean" ? s.commentWrap : fb.search.commentWrap,
+      primaryKeyBadge: normalizePrimaryKeyBadge(s.primaryKeyBadge, fb.search.primaryKeyBadge),
     },
     tableCatalog: {
       tableName: normalizeText(tc.tableName, fb.tableCatalog.tableName),
@@ -318,6 +334,11 @@ function normalizePanelStyles(raw: unknown, fb: PanelStyles): PanelStyles {
       tableComment: normalizeText(tc.tableComment, fb.tableCatalog.tableComment),
       fieldComment: normalizeText(tc.fieldComment, fb.tableCatalog.fieldComment),
       fieldType: normalizeText(tc.fieldType, fb.tableCatalog.fieldType),
+      primaryKeyBadge: normalizePrimaryKeyBadge(tc.primaryKeyBadge, fb.tableCatalog.primaryKeyBadge),
+      fieldSearchHighlightBg:
+        typeof tc.fieldSearchHighlightBg === "string"
+          ? tc.fieldSearchHighlightBg
+          : fb.tableCatalog.fieldSearchHighlightBg,
     },
     quickInsert: {
       keyInput: normalizeBox(qi.keyInput, fb.quickInsert.keyInput),
@@ -359,6 +380,7 @@ function normalizeEditorAppearance(raw: unknown, fb: EditorAppearance): EditorAp
     selectedLineBg: typeof o.selectedLineBg === "string" ? o.selectedLineBg : fb.selectedLineBg,
     activeLineNumberFg:
       typeof o.activeLineNumberFg === "string" ? o.activeLineNumberFg : fb.activeLineNumberFg,
+    lineNumberFg: typeof o.lineNumberFg === "string" ? o.lineNumberFg : fb.lineNumberFg,
   };
 }
 
@@ -379,11 +401,49 @@ type TableCatalogInput = {
   comment?: string;
   fields?: string[];
   primaryKeys?: string[];
+  estimatedRowCount?: unknown;
   fieldInfo?: Record<
     string,
     { comment?: unknown; type?: unknown; length?: unknown; precision?: unknown; isKey?: unknown }
   >;
 };
+
+function normalizeEstimatedRowCount(raw: unknown): number | undefined {
+  if (raw == null || raw === "") return undefined;
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isFinite(n) || n < 0) return undefined;
+  return Math.floor(n);
+}
+
+function normalizeSqlDiagnosticsSettings(
+  raw: unknown,
+  fb: AppConfig["sqlDiagnosticsSettings"],
+): AppConfig["sqlDiagnosticsSettings"] {
+  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const min = o.joinLargeDrivingSmallMinRows;
+  const joinLargeDrivingSmallMinRows =
+    typeof min === "number" && Number.isFinite(min) && min >= 0
+      ? Math.floor(min)
+      : fb.joinLargeDrivingSmallMinRows;
+  const enableJoinLargeDrivingSmallWarning =
+    typeof o.enableJoinLargeDrivingSmallWarning === "boolean"
+      ? o.enableJoinLargeDrivingSmallWarning
+      : fb.enableJoinLargeDrivingSmallWarning;
+  const enableJoinOnConfigMismatchWarning =
+    typeof o.enableJoinOnConfigMismatchWarning === "boolean"
+      ? o.enableJoinOnConfigMismatchWarning
+      : fb.enableJoinOnConfigMismatchWarning;
+  const showRepositionInvalidCursorHint =
+    typeof o.showRepositionInvalidCursorHint === "boolean"
+      ? o.showRepositionInvalidCursorHint
+      : fb.showRepositionInvalidCursorHint;
+  return {
+    enableJoinLargeDrivingSmallWarning,
+    enableJoinOnConfigMismatchWarning,
+    joinLargeDrivingSmallMinRows,
+    showRepositionInvalidCursorHint,
+  };
+}
 
 function normalizeFieldInfo(
   raw: unknown,
@@ -554,6 +614,26 @@ function normalizeHotkeys(raw: unknown, fallback: HotkeyConfig): HotkeyConfig {
       h.compressCurrentBlock ?? fallback.compressCurrentBlock,
     ),
     openSettings: String(h.openSettings ?? fallback.openSettings),
+    openHotkeysSettings: String(h.openHotkeysSettings ?? fallback.openHotkeysSettings),
+    extendSelection: String(h.extendSelection ?? fallback.extendSelection),
+    shrinkSelection: String(h.shrinkSelection ?? fallback.shrinkSelection),
+    repositionActivate: String(h.repositionActivate ?? fallback.repositionActivate),
+    repositionSelectPrev: String(h.repositionSelectPrev ?? fallback.repositionSelectPrev),
+    repositionSelectNext: String(h.repositionSelectNext ?? fallback.repositionSelectNext),
+    repositionSwapPrev: String(h.repositionSwapPrev ?? fallback.repositionSwapPrev),
+    repositionSwapNext: String(h.repositionSwapNext ?? fallback.repositionSwapNext),
+    repositionExtendWithPrev: String(
+      h.repositionExtendWithPrev ?? fallback.repositionExtendWithPrev,
+    ),
+    repositionExtendWithNext: String(
+      h.repositionExtendWithNext ?? fallback.repositionExtendWithNext,
+    ),
+    repositionShrinkRemovePrev: String(
+      h.repositionShrinkRemovePrev ?? fallback.repositionShrinkRemovePrev,
+    ),
+    repositionShrinkRemoveNext: String(
+      h.repositionShrinkRemoveNext ?? fallback.repositionShrinkRemoveNext,
+    ),
   };
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applySqlFormatting } from "./sqlEditorOps";
+import { applyHardWrapLinesOnly, applySqlFormatting } from "./sqlEditorOps";
 import type { SqlFormatting } from "../types";
 
 function fmt(partial: Partial<SqlFormatting> = {}): SqlFormatting {
@@ -8,6 +8,7 @@ function fmt(partial: Partial<SqlFormatting> = {}): SqlFormatting {
     showColumnGuide: false,
     editorLineBreak: "soft",
     compressLevel: 0,
+    searchInsertKeywordsUppercase: true,
     ...partial,
   };
 }
@@ -42,5 +43,21 @@ describe("applySqlFormatting", () => {
     const a = applySqlFormatting(messy, fmt({ editorLineBreak: "soft" }));
     const b = applySqlFormatting(messy, fmt({ editorLineBreak: "hard" }));
     expect(a).toBe(b);
+  });
+
+  it("applyHardWrapLinesOnly breaks long lines when hard wrap", () => {
+    const cfg = fmt({ editorLineBreak: "hard", maxCharsPerLine: 36, compressLevel: 0 });
+    const longLine = "SELECT foo, bar, baz FROM t1 LEFT JOIN t2 ON a = b AND c = d";
+    const out = applyHardWrapLinesOnly(longLine, cfg);
+    expect(out.includes("\n")).toBe(true);
+    for (const line of out.split("\n")) {
+      expect(line.length).toBeLessThanOrEqual(36);
+    }
+  });
+
+  it("applyHardWrapLinesOnly no-op when soft wrap", () => {
+    const cfg = fmt({ editorLineBreak: "soft", maxCharsPerLine: 10 });
+    const s = "hello world wide";
+    expect(applyHardWrapLinesOnly(s, cfg)).toBe(s);
   });
 });

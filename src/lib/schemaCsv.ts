@@ -69,12 +69,19 @@ function toNum(v: string): number | null {
  * CSV columns:
  * 表名, 表注释, 列名, 列注释, 类型, 长度, 精度, 是否是key
  *
- * - First row may be a header (auto-detected)
+ * - First row may be a header (auto-detected); Settings 「解析该组」可强制包含/不包含表头
  * - Extra columns are ignored
  * - Backwards compatible: 旧格式（无表注释列）也能解析；如果第 2 列像列名（短、全大写、无中文），自动按旧格式 7 列处理。
  */
-export function parseSchemaCsv(text: string): TableSchema[] {
-  return analyzeSchemaCsv(text).schemas;
+export type AnalyzeSchemaCsvOptions = {
+  /**
+   * 首行处理：auto 自动识别；header 强制首行为表头并跳过；data 强制首行为数据行。
+   */
+  firstRow?: "auto" | "header" | "data";
+};
+
+export function parseSchemaCsv(text: string, options?: AnalyzeSchemaCsvOptions): TableSchema[] {
+  return analyzeSchemaCsv(text, options).schemas;
 }
 
 /** 启发式：判断是否旧 7 列格式（无表注释列） */
@@ -95,7 +102,10 @@ function looksLikeLegacyLayout(rows: string[][]): boolean {
   return likelyIdent / total >= 0.8;
 }
 
-export function analyzeSchemaCsv(text: string): {
+export function analyzeSchemaCsv(
+  text: string,
+  options?: AnalyzeSchemaCsvOptions,
+): {
   schemas: TableSchema[];
   report: SchemaCsvQualityReport;
 } {
@@ -122,15 +132,23 @@ export function analyzeSchemaCsv(text: string): {
     };
   }
 
-  // 解析表头（如有）
+  const mode = options?.firstRow ?? "auto";
   const first = parseCsvLine(indexedLines[0]!.line);
-  const hasHeader =
-    /表名|table/i.test(first[0] ?? "") &&
-    (
-      /表注释|table.?(remark|comment)/i.test(first[1] ?? "") ||
-      /列名|column/i.test(first[1] ?? "")
-    );
-  const dataStart = hasHeader ? 1 : 0;
+  let hasHeader: boolean;
+  let dataStart: number;
+  if (mode === "header") {
+    hasHeader = true;
+    dataStart = 1;
+  } else if (mode === "data") {
+    hasHeader = false;
+    dataStart = 0;
+  } else {
+    hasHeader =
+      /表名|table/i.test(first[0] ?? "") &&
+      (/表注释|table.?(remark|comment)/i.test(first[1] ?? "") ||
+        /列名|column/i.test(first[1] ?? ""));
+    dataStart = hasHeader ? 1 : 0;
+  }
 
   // 嗅探旧/新布局
   const sampleRows = indexedLines

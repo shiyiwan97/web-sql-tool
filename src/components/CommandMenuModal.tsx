@@ -50,12 +50,13 @@ export function CommandMenuModal({
       {
         id: "open-settings",
         title: "打开设置",
-        detail: "Schema CSV / 行长 / 配置导入导出等",
+        detail: "主题 / 编辑器 / SQL 警告设置 / 配置导入导出等",
         run: onOpenSettings,
       },
       {
         id: "open-hotkeys",
         title: "快捷键设置",
+        shortcut: hk.openHotkeysSettings,
         detail: "查看/修改快捷键绑定",
         run: onOpenHotkeys,
       },
@@ -78,6 +79,18 @@ export function CommandMenuModal({
         id: "compress-current-block",
         title: "压缩当前分号块",
         shortcut: hk.compressCurrentBlock,
+      },
+      {
+        id: "extend-selection",
+        title: "Extend Selection",
+        shortcut: hk.extendSelection,
+        detail: "扩展选区（JetBrains / IntelliJ IDEA 同名动作）",
+      },
+      {
+        id: "shrink-selection",
+        title: "Shrink Selection",
+        shortcut: hk.shrinkSelection,
+        detail: "缩小选区",
       },
       ...config.quickInserts.map((x) => ({
         id: `qi-${x.id}`,
