@@ -117,9 +117,6 @@ export function SavedSqlPanel({
         overflow: "auto",
       }}
     >
-      <p style={hint}>
-        槽位对应<strong>分号块</strong>：快捷键会按当前块或选区（去注释）<strong>新建一条存档</strong>。「使用」把该槽写入光标所在块。左侧 ⠿ 拖动排序；右键行可单独设置背景色。
-      </p>
       {slots.length === 0 ? (
         <p style={{ ...hint, marginTop: 0 }}>暂无存档；在编辑器中按下「保存到已存 SQL」快捷键即可自动添加。</p>
       ) : (

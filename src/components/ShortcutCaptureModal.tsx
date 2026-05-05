@@ -18,15 +18,15 @@ function canConfirmShortcut(
   initialShortcut: string,
   existingShortcuts: ShortcutConflictEntry[],
 ): boolean {
-  const targetNorm = trimmed ? normalizeShortcutSpec(trimmed) : "";
-  const conflict = targetNorm
-    ? existingShortcuts.find(
-        (e) => e.shortcut && normalizeShortcutSpec(e.shortcut) === targetNorm,
-      )
-    : undefined;
+  // 空字符串 = 解除绑定，始终允许保存
+  if (trimmed.length === 0) return true;
+  const targetNorm = normalizeShortcutSpec(trimmed);
+  const conflict = existingShortcuts.find(
+    (e) => e.shortcut && normalizeShortcutSpec(e.shortcut) === targetNorm,
+  );
   const sameAsInitial =
     !!initialShortcut && targetNorm === normalizeShortcutSpec(initialShortcut);
-  return trimmed.length > 0 && (!conflict || sameAsInitial);
+  return !conflict || sameAsInitial;
 }
 
 export type ShortcutCaptureModalProps = {
@@ -77,7 +77,6 @@ export function ShortcutCaptureModal({
     }
     if (e.key === "Enter") {
       const trimmed = liveRef.current.trim();
-      if (!trimmed) return;
       e.preventDefault();
       e.stopPropagation();
       e.stopImmediatePropagation();
@@ -143,7 +142,9 @@ export function ShortcutCaptureModal({
           )}
         </div>
 
-        {conflict && !sameAsInitial ? (
+        {!trimmed ? (
+          <div style={okBox}>清空后保存将解除快捷键绑定。</div>
+        ) : conflict && !sameAsInitial ? (
           <div style={conflictBox} role="alert">
             <strong>⚠ 冲突</strong>：与{" "}
             <code style={{ margin: "0 4px", padding: "1px 4px", background: "rgba(255,255,255,0.05)", borderRadius: 3 }}>
@@ -185,10 +186,10 @@ export function ShortcutCaptureModal({
             disabled={!canConfirm}
             onClick={() => canConfirm && onConfirm(trimmed)}
             title={
-              !trimmed
-                ? "请先按下组合键"
-                : conflict && !sameAsInitial
+              conflict && !sameAsInitial
                 ? `与「${conflict.label}」冲突`
+                : !trimmed
+                ? "保存（解除绑定）"
                 : "保存"
             }
           >

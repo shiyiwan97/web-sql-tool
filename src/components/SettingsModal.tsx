@@ -504,6 +504,160 @@ export function SettingsModal({
               </p>
 
               <div style={{ marginTop: 12 }}>
+                <label style={lbl2}>字段组触发符</label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
+                  <input
+                    type="text"
+                    style={{ ...inp, width: 72, fontFamily: "var(--mono)" }}
+                    value={draft.fieldGroupTrigger}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v.length > 0) setDraft((d) => ({ ...d, fieldGroupTrigger: v }));
+                    }}
+                    placeholder="#"
+                  />
+                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                    在搜索栏输入&thinsp;
+                    <code style={{ fontFamily: "var(--mono)", color: "#fbbf24" }}>
+                      {draft.fieldGroupTrigger}组名
+                    </code>
+                    &thinsp;可检索该字段组的所有字段；在 SQL 编辑器中输入同样触发智能补全（弹出"表:组名"列表，选中后插入该组所有字段）。字段组在<strong>查看表</strong>中配置。
+                  </span>
+                </div>
+              </div>
+
+              <div style={{ marginTop: 12 }}>
+                <label style={lbl2}>字段组补全显示格式</label>
+                <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 6 }}>
+                  可混合固定文字与占位符，占位符用 <code style={{ fontFamily: "var(--mono)", color: "#fbbf24" }}>{"{}"}</code> 包裹。
+                  左侧紧贴图标，右侧靠右对齐。可用占位符：
+                  <br />
+                  <code style={{ fontFamily: "var(--mono)", color: "#fbbf24" }}>
+                    {"{key}"}&ensp;{"{keyName}"}&ensp;{"{table}"}&ensp;{"{count}"}&ensp;{"{fields}"}&ensp;{"{fields3}"}&ensp;{"{fields5}"}
+                  </code>
+                  <span style={{ marginLeft: 6 }}>— 固定文字示例：</span>
+                  <code style={{ fontFamily: "var(--mono)", color: "var(--text-muted)" }}>表 {"{table}"} 的组</code>
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <span style={{ ...lbl2, marginBottom: 0, width: 60, flexShrink: 0 }}>左侧</span>
+                    <input
+                      type="text"
+                      style={{ ...inp, flex: 1, fontFamily: "var(--mono)" }}
+                      value={draft.fieldGroupCompletionFormat?.left ?? "{key}"}
+                      onChange={(e) =>
+                        setDraft((d) => ({
+                          ...d,
+                          fieldGroupCompletionFormat: {
+                            ...d.fieldGroupCompletionFormat,
+                            left: e.target.value,
+                          },
+                        }))
+                      }
+                      placeholder="{key}"
+                    />
+                  </div>
+                  <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <span style={{ ...lbl2, marginBottom: 0, width: 60, flexShrink: 0 }}>右侧</span>
+                    <input
+                      type="text"
+                      style={{ ...inp, flex: 1, fontFamily: "var(--mono)" }}
+                      value={draft.fieldGroupCompletionFormat?.right ?? "{table}: {fields5}"}
+                      onChange={(e) =>
+                        setDraft((d) => ({
+                          ...d,
+                          fieldGroupCompletionFormat: {
+                            ...d.fieldGroupCompletionFormat,
+                            right: e.target.value,
+                          },
+                        }))
+                      }
+                      placeholder="{table}: {fields5}"
+                    />
+                  </div>
+                  {/* 实时预览 */}
+                  {(() => {
+                    const applyPreview = (tpl: string) =>
+                      tpl
+                        .replace(/\{key\}/g, `${draft.fieldGroupTrigger}id`)
+                        .replace(/\{keyName\}/g, "id")
+                        .replace(/\{table\}/g, "STUDENT")
+                        .replace(/\{count\}/g, "3")
+                        .replace(/\{fields\}/g, "STUID, STUNM, CLASS")
+                        .replace(/\{fields3\}/g, "STUID, STUNM, CLASS")
+                        .replace(/\{fields5\}/g, "STUID, STUNM, CLASS");
+                    return (
+                      <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                        预览：
+                        <code style={{ fontFamily: "var(--mono)", color: "var(--text-main)" }}>
+                          {applyPreview(draft.fieldGroupCompletionFormat?.left ?? "{key}")}
+                        </code>
+                        <span style={{ color: "var(--text-muted)", margin: "0 6px" }}>···</span>
+                        <code style={{ fontFamily: "var(--mono)", color: "var(--text-muted)", fontSize: 11 }}>
+                          {applyPreview(draft.fieldGroupCompletionFormat?.right ?? "{table}: {fields5}")}
+                        </code>
+                      </div>
+                    );
+                  })()}
+                  {/* 上下文分隔线开关 */}
+                  <label
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      fontSize: 12,
+                      color: "var(--text-main)",
+                      cursor: "pointer",
+                      marginTop: 2,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={draft.fieldGroupCompletionFormat?.showSeparator ?? true}
+                      onChange={(e) =>
+                        setDraft((d) => ({
+                          ...d,
+                          fieldGroupCompletionFormat: {
+                            ...d.fieldGroupCompletionFormat,
+                            showSeparator: e.target.checked,
+                          },
+                        }))
+                      }
+                    />
+                    在 FROM 表的组与其他表的组之间显示分隔线
+                    <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                      （Monaco 无原生分隔符 API，以灰显补全项模拟）
+                    </span>
+                  </label>
+                </div>
+              </div>
+
+              <div style={{ marginTop: 12 }}>
+                <label style={lbl2}>「快捷赋值」序号图标交互</label>
+                <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 4 }}>
+                  「快捷赋值」侧栏每行前会显示一个序号图标。点击该图标会把当前行的「值」
+                  插入到编辑器光标处；若同时处于「已存 SQL」<code style={{ fontFamily: "var(--mono)", color: "#fbbf24" }}>${`{}`}</code> 占位符会话，插入后会自动跳到下一个占位符。
+                  右键序号图标可设置该行的背景色（见侧栏右键菜单）。
+                </div>
+                <select
+                  style={inp}
+                  value={draft.quickInsertNumberIconBehavior}
+                  onChange={(e) =>
+                    setDraft((d) => ({
+                      ...d,
+                      quickInsertNumberIconBehavior: e.target
+                        .value as AppConfig["quickInsertNumberIconBehavior"],
+                    }))
+                  }
+                >
+                  <option value="dblclick">仅双击触发（默认，避免误触）</option>
+                  <option value="click">仅单击触发（带 250ms 去抖）</option>
+                  <option value="both">单击和双击均触发</option>
+                  <option value="none">禁用（仅作展示）</option>
+                </select>
+              </div>
+
+              <div style={{ marginTop: 12 }}>
                 <label style={lbl2}>Debug 模式</label>
                 <select
                   style={inp}

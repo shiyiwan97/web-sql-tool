@@ -11,13 +11,23 @@ import {
 import { QuickInsertPanel } from "./components/QuickInsertPanel";
 import { RepositionInvalidCursorToast } from "./components/RepositionInvalidCursorToast";
 import { SavedSqlPanel } from "./components/SavedSqlPanel";
+import {
+  PlaceholderAssistBar,
+  type PlaceholderItem,
+  type PlaceholderSession,
+} from "./components/PlaceholderAssistBar";
 import { HotkeysSettingsModal } from "./components/HotkeysSettingsModal";
 import { CommandMenuModal } from "./components/CommandMenuModal";
 import { RelationsModal } from "./components/RelationsModal";
 import { TableCatalogModal } from "./components/TableCatalogModal";
 import { ConfigDiffModal } from "./components/ConfigDiffModal";
 import { PanelStyleModal, type PanelStyleTarget } from "./components/PanelStyleModal";
-import type { AppConfig, PanelSlot, SqlCompressLevel } from "./types";
+import type {
+  AppConfig,
+  PanelSlot,
+  QuickInsertEntry,
+  SqlCompressLevel,
+} from "./types";
 import { loadConfigBundle, saveConfigBundle } from "./lib/storage";
 import { resolveConfig, type ConfigBundle, normalizeBundle } from "./lib/configBundle";
 import {
@@ -67,7 +77,6 @@ import {
   type SavedSqlSlot,
 } from "./lib/savedSqlStorage";
 import { installMonacoFindWidgetWorkaround } from "./lib/monacoFindWidgetWorkaround";
-import { installTempWordHighlightTest } from "./lib/monacoTempWordHighlight";
 import { normalizeShortcutSpec, shortcutStringFromKeyboardEvent } from "./lib/shortcutFormat";
 import {
   parseFieldSegments,
@@ -156,6 +165,8 @@ export default function App() {
   const [monacoReadyTick, setMonacoReadyTick] = useState(0);
   const [curBlock, setCurBlock] = useState({ i: 1, n: 1 });
   const [cursorLc, setCursorLc] = useState({ line: 1, col: 1 });
+  /** 当前光标所在 SQL 块中出现的表名（大写短名），供搜索侧栏上下文感知使用 */
+  const [contextTableKeys, setContextTableKeys] = useState<string[]>([]);
   const [editorFontSize, setEditorFontSize] = useState(13);
   /** JOIN 提示条：仅 Ctrl/⌘ 按下且悬停该行时显示手型+下划线 */
   const [joinIssueHoverIndex, setJoinIssueHoverIndex] = useState<number | null>(null);
@@ -397,6 +408,21 @@ export default function App() {
 
   /** 侧栏插入 SQL 后恢复光标（受控 value 同步会把光标甩到文末） */
   const pendingEditorCursorOffsetRef = useRef<number | null>(null);
+
+  // ─── 已存 SQL 占位符 ${} 会话 ──────────────────────────────
+  const [phSession, setPhSession] = useState<PlaceholderSession | null>(null);
+  const phSessionRef = useRef<PlaceholderSession | null>(null);
+  phSessionRef.current = phSession;
+  /**
+   * 「使用」插入含占位符的 SQL 后，受控 setSql 会异步同步到 Monaco 模型。
+   * 在 sql 变化的下一个微任务里扫描占位符并创建 decoration —— 通过这个 ref 传递「需扫描的块范围」。
+   */
+  const pendingPhSetupRef = useRef<{
+    blockStart: number;
+    blockEnd: number;
+  } | null>(null);
+  /** 占位符 decoration ids 当前快照（用于清理） */
+  const phDecorationIdsRef = useRef<string[]>([]);
   const prevLineBreakRef = useRef<"soft" | "hard">(config.sqlFormatting.editorLineBreak);
   const autoHardWrapRef = useRef(false);
   useEffect(() => {
@@ -458,6 +484,76 @@ export default function App() {
       const pos = model.getPositionAt(clamped);
       ed.setPosition(pos);
       ed.revealPositionInCenter(pos);
+    }, 0);
+    return () => clearTimeout(t);
+  }, [sql]);
+
+  // ─── 占位符会话：sql 同步后扫描 ${} 并创建 decoration ────────
+  useEffect(() => {
+    const data = pendingPhSetupRef.current;
+    if (!data) return;
+    const t = window.setTimeout(() => {
+      if (pendingPhSetupRef.current !== data) return;
+      pendingPhSetupRef.current = null;
+      const ed = editorRef.current;
+      const monaco = monacoRef.current;
+      const model = ed?.getModel();
+      if (!ed || !monaco || !model) return;
+      // 关闭已有会话
+      if (phDecorationIdsRef.current.length > 0) {
+        ed.deltaDecorations(phDecorationIdsRef.current, []);
+        phDecorationIdsRef.current = [];
+      }
+      const fullText = model.getValue();
+      const blockEnd = Math.min(data.blockEnd, fullText.length);
+      const blockText = fullText.slice(data.blockStart, blockEnd);
+      const re = /\$\{([^}]+)\}/g;
+      type Found = { name: string; startOff: number; endOff: number };
+      const found: Found[] = [];
+      let m: RegExpExecArray | null;
+      while ((m = re.exec(blockText)) !== null) {
+        found.push({
+          name: m[1],
+          startOff: data.blockStart + m.index,
+          endOff: data.blockStart + m.index + m[0].length,
+        });
+      }
+      if (found.length === 0) return;
+
+      const decoOptions: Monaco.editor.IModelDeltaDecoration[] = found.map(
+        (it, i) => ({
+          range: monaco.Range.fromPositions(
+            model.getPositionAt(it.startOff),
+            model.getPositionAt(it.endOff),
+          ),
+          options: {
+            inlineClassName:
+              i === 0 ? "sqlwt-placeholder sqlwt-placeholder-active" : "sqlwt-placeholder",
+            stickiness:
+              monaco.editor.TrackedRangeStickiness.AlwaysGrowsWhenTypingAtEdges,
+            hoverMessage: { value: `占位符 \`\${${it.name}}\`` },
+          },
+        }),
+      );
+      const ids = ed.deltaDecorations([], decoOptions);
+      phDecorationIdsRef.current = ids;
+
+      const items: PlaceholderItem[] = found.map((it, i) => ({
+        name: it.name,
+        decorationId: ids[i],
+      }));
+      const values: Record<string, string> = {};
+      for (const it of found) if (!(it.name in values)) values[it.name] = "";
+
+      setPhSession({ items, activeIdx: 0, values });
+
+      // 选中第一个占位符
+      const first = found[0];
+      const startPos = model.getPositionAt(first.startOff);
+      const endPos = model.getPositionAt(first.endOff);
+      ed.setSelection(monaco.Range.fromPositions(startPos, endPos));
+      ed.revealRangeInCenter(monaco.Range.fromPositions(startPos, endPos));
+      ed.focus();
     }, 0);
     return () => clearTimeout(t);
   }, [sql]);
@@ -697,7 +793,24 @@ export default function App() {
       const idx = blockIndexAtOffset(full, off);
       const next = replaceBlockText(full, idx, s.sql);
       setSavedSqlSelectedId(id);
-      pendingEditorCursorOffsetRef.current = Math.min(off, next.length);
+
+      // 检查 slot 是否包含 ${name} 占位符；若有，准备启动占位符会话
+      const hasPlaceholder = /\$\{[^}]+\}/.test(s.sql);
+      if (hasPlaceholder) {
+        // 取下一帧时新文本块在 model 中的 [blockStart, blockEnd) 范围
+        const newBlocks = getSqlBlocks(next);
+        const nb = newBlocks[idx];
+        if (nb) {
+          pendingPhSetupRef.current = {
+            blockStart: nb.start,
+            blockEnd: nb.end,
+          };
+        }
+        // 不预设 cursor，让占位符扫描后定位到第一个占位符
+        pendingEditorCursorOffsetRef.current = null;
+      } else {
+        pendingEditorCursorOffsetRef.current = Math.min(off, next.length);
+      }
       setSql(next);
     },
     [savedSqlSlots, sql],
@@ -718,6 +831,192 @@ export default function App() {
     },
     [],
   );
+
+  // ─── 占位符会话操作 ───────────────────────────────────────
+  /** 关闭会话：清除 decoration、隐藏 Bar */
+  const closePhSession = useCallback(() => {
+    const ed = editorRef.current;
+    if (ed && phDecorationIdsRef.current.length > 0) {
+      ed.deltaDecorations(phDecorationIdsRef.current, []);
+    }
+    phDecorationIdsRef.current = [];
+    setPhSession(null);
+  }, []);
+
+  /** 跳转到指定下标 idx 对应的占位符；若超出末尾则关闭会话 */
+  const jumpToPlaceholder = useCallback(
+    (idx: number) => {
+      const session = phSessionRef.current;
+      const ed = editorRef.current;
+      const monaco = monacoRef.current;
+      const model = ed?.getModel();
+      if (!session || !ed || !monaco || !model) return;
+      if (idx < 0 || idx >= session.items.length) {
+        closePhSession();
+        return;
+      }
+      const target = session.items[idx];
+      const r = model.getDecorationRange(target.decorationId);
+      if (!r) return;
+      ed.setSelection(r);
+      ed.revealRangeInCenter(r);
+      ed.focus();
+
+      // 更新激活高亮：把每个 decoration 的 inlineClassName 重写
+      const newDecos: Monaco.editor.IModelDeltaDecoration[] = session.items.map(
+        (it, i) => {
+          const range = model.getDecorationRange(it.decorationId);
+          return {
+            range: range ?? r,
+            options: {
+              inlineClassName:
+                i === idx
+                  ? "sqlwt-placeholder sqlwt-placeholder-active"
+                  : "sqlwt-placeholder",
+              stickiness:
+                monaco.editor.TrackedRangeStickiness.AlwaysGrowsWhenTypingAtEdges,
+              hoverMessage: { value: `占位符 \`\${${it.name}}\`` },
+            },
+          };
+        },
+      );
+      const ids = ed.deltaDecorations(phDecorationIdsRef.current, newDecos);
+      phDecorationIdsRef.current = ids;
+      // 同步 items 的 decorationId
+      const newItems = session.items.map((it, i) => ({
+        ...it,
+        decorationId: ids[i],
+      }));
+      setPhSession({ ...session, items: newItems, activeIdx: idx });
+    },
+    [closePhSession],
+  );
+
+  /** 推进到下一个占位符；若到末尾则结束会话 */
+  const advancePlaceholder = useCallback(() => {
+    const session = phSessionRef.current;
+    if (!session) return;
+    jumpToPlaceholder(session.activeIdx + 1);
+  }, [jumpToPlaceholder]);
+
+  /**
+   * 应用变量值到「当前激活占位符」位置。
+   * advance=true 应用后跳到下一个；false 仅写入值。
+   */
+  const applyPlaceholderValue = useCallback(
+    (name: string, advance: boolean) => {
+      const session = phSessionRef.current;
+      const ed = editorRef.current;
+      const model = ed?.getModel();
+      if (!session || !ed || !model) return;
+      const value = session.values[name] ?? "";
+      const active = session.items[session.activeIdx];
+      if (!active) return;
+      const range = model.getDecorationRange(active.decorationId);
+      if (!range) return;
+      ed.executeEdits("placeholder-fill", [
+        {
+          range,
+          text: value,
+          forceMoveMarkers: true,
+        },
+      ]);
+      if (advance) advancePlaceholder();
+      else ed.focus();
+    },
+    [advancePlaceholder],
+  );
+
+  const setPlaceholderValue = useCallback((name: string, value: string) => {
+    const session = phSessionRef.current;
+    if (!session) return;
+    setPhSession({ ...session, values: { ...session.values, [name]: value } });
+  }, []);
+
+  /**
+   * 「快捷赋值」侧栏行首序号图标点击：把指定行的「值」插入到编辑器光标处（替换选区）。
+   * 若同时处于占位符会话，则插入后自动跳到下一个占位符。
+   */
+  const insertQuickInsertValueAtCursor = useCallback(
+    (entry: QuickInsertEntry) => {
+      const ed = editorRef.current;
+      const monaco = monacoRef.current;
+      const model = ed?.getModel();
+      if (!ed || !monaco || !model) return;
+      const value = entry.value ?? "";
+      const sel = ed.getSelection();
+      let range: Monaco.IRange;
+      if (sel) {
+        range = sel;
+      } else {
+        const pos = ed.getPosition() ?? { lineNumber: 1, column: 1 };
+        range = new monaco.Range(
+          pos.lineNumber,
+          pos.column,
+          pos.lineNumber,
+          pos.column,
+        );
+      }
+      ed.executeEdits("quick-insert-icon", [
+        { range, text: value, forceMoveMarkers: true },
+      ]);
+      // 占位符会话中插入后自动推进
+      if (phSessionRef.current) {
+        advancePlaceholder();
+      } else {
+        ed.focus();
+      }
+    },
+    [advancePlaceholder],
+  );
+
+  /** 编辑器内 Enter / Tab / Esc：占位符会话激活时拦截并推进 */
+  useEffect(() => {
+    if (!phSession) return;
+    const ed = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!ed || !monaco) return;
+    const disp = ed.onKeyDown((e) => {
+      const sess = phSessionRef.current;
+      if (!sess) return;
+      // Esc 始终结束会话
+      if (e.keyCode === monaco.KeyCode.Escape) {
+        e.preventDefault();
+        e.stopPropagation();
+        closePhSession();
+        return;
+      }
+      // Enter / Tab：仅在光标处于「当前激活占位符」range 内才拦截推进
+      const isAdvance =
+        e.keyCode === monaco.KeyCode.Enter ||
+        e.keyCode === monaco.KeyCode.Tab;
+      if (!isAdvance) return;
+      const model = ed.getModel();
+      const pos = ed.getPosition();
+      if (!model || !pos) return;
+      const active = sess.items[sess.activeIdx];
+      if (!active) return;
+      const range = model.getDecorationRange(active.decorationId);
+      if (!range) return;
+      const cursorOff = model.getOffsetAt(pos);
+      const startOff = model.getOffsetAt(range.getStartPosition());
+      const endOff = model.getOffsetAt(range.getEndPosition());
+      // 选区起止两端均在 range 内（含端点）— 视为「在当前占位符内」
+      const sel = ed.getSelection();
+      const selStart = sel ? model.getOffsetAt(sel.getStartPosition()) : cursorOff;
+      const selEnd = sel ? model.getOffsetAt(sel.getEndPosition()) : cursorOff;
+      const inRange =
+        selStart >= startOff &&
+        selEnd <= endOff &&
+        cursorOff >= startOff &&
+        cursorOff <= endOff;
+      if (!inRange) return;
+      e.preventDefault();
+      e.stopPropagation();
+      advancePlaceholder();
+    });
+    return () => disp.dispose();
+  }, [phSession, advancePlaceholder, closePhSession]);
 
   const deleteSavedSlot = useCallback((id: string) => {
     setSavedSqlSlots((slots) => slots.filter((s) => s.id !== id));
@@ -840,6 +1139,115 @@ export default function App() {
     return () => document.removeEventListener("keydown", onKey, true);
   }, [config.hotkeys.openHotkeysSettings]);
 
+  // 全局快捷键：打开「查看表」面板
+  useEffect(() => {
+    const target = config.hotkeys.openTableCatalog || "";
+    if (!target) return;
+    const parts = target.split("+").map((s) => s.trim()).filter(Boolean);
+    const want = {
+      ctrl: parts.some((p) => /^ctrl|control$/i.test(p)),
+      alt: parts.some((p) => /^alt$/i.test(p)),
+      shift: parts.some((p) => /^shift$/i.test(p)),
+      meta: parts.some((p) => /^meta|cmd|command$/i.test(p)),
+      key: parts.find((p) => !/^(ctrl|control|alt|shift|meta|cmd|command)$/i.test(p)) ?? "",
+    };
+    if (!want.key) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey !== want.ctrl) return;
+      if (e.altKey !== want.alt) return;
+      if (e.shiftKey !== want.shift) return;
+      if (e.metaKey !== want.meta) return;
+      const k = want.key.toLowerCase();
+      const hit =
+        e.key.toLowerCase() === k ||
+        (k === "," && e.key === ",") ||
+        (k === "." && e.key === ".") ||
+        (k.startsWith("f") && e.key.toLowerCase() === k);
+      if (!hit) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setTableCatalogOpen(true);
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [config.hotkeys.openTableCatalog]);
+
+  // 全局快捷键：打开「表关系」面板
+  useEffect(() => {
+    const target = config.hotkeys.openRelations || "";
+    if (!target) return;
+    const parts = target.split("+").map((s) => s.trim()).filter(Boolean);
+    const want = {
+      ctrl: parts.some((p) => /^ctrl|control$/i.test(p)),
+      alt: parts.some((p) => /^alt$/i.test(p)),
+      shift: parts.some((p) => /^shift$/i.test(p)),
+      meta: parts.some((p) => /^meta|cmd|command$/i.test(p)),
+      key: parts.find((p) => !/^(ctrl|control|alt|shift|meta|cmd|command)$/i.test(p)) ?? "",
+    };
+    if (!want.key) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey !== want.ctrl) return;
+      if (e.altKey !== want.alt) return;
+      if (e.shiftKey !== want.shift) return;
+      if (e.metaKey !== want.meta) return;
+      const k = want.key.toLowerCase();
+      const hit =
+        e.key.toLowerCase() === k ||
+        (k === "," && e.key === ",") ||
+        (k === "." && e.key === ".") ||
+        (k.startsWith("f") && e.key.toLowerCase() === k);
+      if (!hit) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setRelationsOpen(true);
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [config.hotkeys.openRelations]);
+
+  // 全局快捷键：占位符 · 快捷赋值并跳到下一个
+  // 取当前激活占位符的 name 对应 chip 的值，写入激活占位符并推进；空值时仅推进。
+  useEffect(() => {
+    const target = config.hotkeys.nextPlaceholder || "";
+    if (!target) return;
+    const parts = target.split("+").map((s) => s.trim()).filter(Boolean);
+    const want = {
+      ctrl: parts.some((p) => /^ctrl|control$/i.test(p)),
+      alt: parts.some((p) => /^alt$/i.test(p)),
+      shift: parts.some((p) => /^shift$/i.test(p)),
+      meta: parts.some((p) => /^meta|cmd|command$/i.test(p)),
+      key: parts.find((p) => !/^(ctrl|control|alt|shift|meta|cmd|command)$/i.test(p)) ?? "",
+    };
+    if (!want.key) return;
+    const onKey = (e: KeyboardEvent) => {
+      const session = phSessionRef.current;
+      if (!session) return;
+      if (e.ctrlKey !== want.ctrl) return;
+      if (e.altKey !== want.alt) return;
+      if (e.shiftKey !== want.shift) return;
+      if (e.metaKey !== want.meta) return;
+      const k = want.key.toLowerCase();
+      const hit =
+        e.key.toLowerCase() === k ||
+        (k === "," && e.key === ",") ||
+        (k === "." && e.key === ".") ||
+        (k.startsWith("f") && e.key.toLowerCase() === k);
+      if (!hit) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const active = session.items[session.activeIdx];
+      if (!active) return;
+      const v = session.values[active.name] ?? "";
+      if (v.length > 0) {
+        applyPlaceholderValue(active.name, true);
+      } else {
+        advancePlaceholder();
+      }
+    };
+    document.addEventListener("keydown", onKey, true);
+    return () => document.removeEventListener("keydown", onKey, true);
+  }, [config.hotkeys.nextPlaceholder, advancePlaceholder, applyPlaceholderValue]);
+
   /** Extend/Shrink Selection + 调整位置：捕获阶段（见 selectionHotkeyCapture.ts） */
   useEffect(() => {
     setSelectionHotkeyCaptureContext({
@@ -855,7 +1263,7 @@ export default function App() {
     const monaco = monacoRef.current;
     if (!monaco || monacoReadyTick === 0) return;
     const provider = monaco.languages.registerCompletionItemProvider("sql", {
-      triggerCharacters: [".", " "],
+      triggerCharacters: [".", " ", "#", "@", "!", "$", "%"],
       provideCompletionItems: (model, position) => {
         const word = model.getWordUntilPosition(position);
         const range: Monaco.IRange = {
@@ -864,19 +1272,31 @@ export default function App() {
           startColumn: word.startColumn,
           endColumn: word.endColumn,
         };
-        // 检测点号：alias.<cursor> → 仅返回该表/别名的字段
         const lineText = model.getLineContent(position.lineNumber);
         const before = lineText.slice(0, position.column - 1);
-        const dotMatch = /([A-Za-z_][\w$]*)\.\s*([\w$]*)$/.exec(before);
         const catalog = configRef.current.tableCatalog;
+        const trigger = configRef.current.fieldGroupTrigger ?? "#";
+
+        // ── 别名映射 + 上下文表集合（提前计算，供字段组和普通补全共用） ──
         const aliasMap = new Map<string, string>(); // alias / table → table key
         for (const t of catalog) {
           aliasMap.set(t.table.toUpperCase(), t.table);
           if (t.qualifiedName) aliasMap.set(t.qualifiedName.toUpperCase(), t.table);
         }
-        // 解析当前文档中出现的别名（FROM/JOIN <table> <alias>）
+        let contextTableSet = new Set<string>(); // 当前块的表名 key，用于排序优先级
         try {
           const fullText = model.getValue();
+          const off = model.getOffsetAt(position);
+          const blockIdx = blockIndexAtOffset(fullText, off);
+          const blocks = getSqlBlocks(fullText);
+          const b = blocks[blockIdx];
+          const blockText = b ? fullText.slice(b.start, b.end) : fullText;
+          const blockAliasMap = extractAliasedTables(blockText);
+          contextTableSet = new Set(blockAliasMap.keys());
+          for (const [tk, alias] of blockAliasMap) {
+            const hit = catalog.find((t) => t.table.toUpperCase() === tk);
+            if (hit) aliasMap.set(alias.toUpperCase(), hit.table);
+          }
           const re = /\b(?:FROM|JOIN)\s+([\w.]+)\s+(?:AS\s+)?([A-Za-z_][\w$]*)/gi;
           let m: RegExpExecArray | null;
           while ((m = re.exec(fullText)) !== null) {
@@ -889,6 +1309,135 @@ export default function App() {
         } catch {
           // ignore
         }
+
+        // ── 字段组补全：触发符 + 组名 ──
+        const escapedTrigger = trigger.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const groupTriggerRe = new RegExp(`${escapedTrigger}([\\w-]*)$`);
+        const groupTriggerMatch = groupTriggerRe.exec(before);
+        if (groupTriggerMatch) {
+          const typedKey = groupTriggerMatch[1].toLowerCase();
+          const groupKeySet = new Map<string, { table: string; fields: string[] }[]>();
+          for (const t of catalog) {
+            for (const g of t.fieldGroups ?? []) {
+              if (!g.key.toLowerCase().startsWith(typedKey)) continue;
+              if (!groupKeySet.has(g.key)) groupKeySet.set(g.key, []);
+              groupKeySet.get(g.key)!.push({ table: t.table, fields: g.fields });
+            }
+          }
+          if (groupKeySet.size > 0) {
+            const fmtCfg = configRef.current.fieldGroupCompletionFormat ?? {
+              left: "{key}",
+              right: "{table}: {fields5}",
+            };
+            // 计算替换范围：覆盖触发符 + 已输入的内容
+            const triggerStart = word.startColumn - trigger.length;
+            const groupRange: Monaco.IRange = {
+              startLineNumber: position.lineNumber,
+              endLineNumber: position.lineNumber,
+              startColumn: Math.max(1, triggerStart),
+              endColumn: position.column,
+            };
+
+            const applyFmt = (
+              template: string,
+              vars: { key: string; keyName: string; table: string; count: string; fields: string; fields3: string; fields5: string }
+            ) =>
+              template
+                .replace(/\{key\}/g, vars.key)
+                .replace(/\{keyName\}/g, vars.keyName)
+                .replace(/\{table\}/g, vars.table)
+                .replace(/\{count\}/g, vars.count)
+                .replace(/\{fields\}/g, vars.fields)
+                .replace(/\{fields3\}/g, vars.fields3)
+                .replace(/\{fields5\}/g, vars.fields5);
+
+            const makeGroupItem = (
+              entry: { table: string; fields: string[] },
+              gKey: string,
+              isCtx: boolean
+            ): Monaco.languages.CompletionItem => {
+              const insertFields = entry.fields.join(", ");
+              const tableEntry = catalog.find((t) => t.table === entry.table);
+              const fields3 =
+                entry.fields.slice(0, 3).join(", ") +
+                (entry.fields.length > 3 ? ` …+${entry.fields.length - 3}` : "");
+              const fields5 =
+                entry.fields.slice(0, 5).join(", ") +
+                (entry.fields.length > 5 ? ` …+${entry.fields.length - 5}` : "");
+              const formatVars = {
+                key: `${trigger}${gKey}`,
+                keyName: gKey,
+                table: entry.table,
+                count: String(entry.fields.length),
+                fields: insertFields,
+                fields3,
+                fields5,
+              };
+              // 把普通空格转为 NBSP（\u00a0），避免 Monaco 补全列表的 HTML 文本节点
+              // 因 white-space:normal 将多个空格合并或首尾空格被去掉
+              const nbspify = (s: string) => s.replace(/ /g, "\u00a0");
+              const leftLabel = nbspify(applyFmt(fmtCfg.left, formatVars));
+              const rightLabel = nbspify(applyFmt(fmtCfg.right, formatVars));
+              // 简洁文档：只保留字段明细表
+              const fieldRows = entry.fields
+                .map((f) => {
+                  const info = tableEntry?.fieldInfo?.[f.toUpperCase()];
+                  const typStr = info?.type
+                    ? `${info.type}${info.length != null ? `(${info.length}${info.precision ? "," + info.precision : ""})` : ""}`
+                    : "";
+                  return `| \`${f}\` | ${typStr} | ${info?.comment ?? ""} |`;
+                })
+                .join("\n");
+              const docValue = `| 字段 | 类型 | 注释 |\n|:-----|:-----|:------|\n${fieldRows}`;
+              return {
+                // label = 最左侧，description = 最右侧（真正右对齐）
+                label: { label: leftLabel, description: rightLabel },
+                kind: monaco.languages.CompletionItemKind.Snippet,
+                insertText: insertFields,
+                range: groupRange,
+                documentation: { value: docValue },
+                sortText: isCtx ? `a_${gKey}_${entry.table}` : `c_${gKey}_${entry.table}`,
+                filterText: `${trigger}${gKey}`,
+              };
+            };
+
+            const suggestions: Monaco.languages.CompletionItem[] = [];
+            for (const [gKey, entries] of groupKeySet) {
+              const ctxEntries = entries.filter((e) =>
+                contextTableSet.has(e.table.toUpperCase())
+              );
+              const otherEntries = entries.filter(
+                (e) => !contextTableSet.has(e.table.toUpperCase())
+              );
+              for (const e of ctxEntries) suggestions.push(makeGroupItem(e, gKey, true));
+              // 上下文组与其他组之间的分隔符（可在设置中关闭）
+              // Monaco 无原生分隔符 API（issue #1077 closed），用 Deprecated Snippet 项模拟：
+              //   - Snippet kind → 与组项图标相同（□），避免出现 "abc"
+              //   - Deprecated tag → 灰色删除线，视觉上与可选项明显区分
+              //   - insertText "${0}" → 选中后不插入任何内容
+              if (ctxEntries.length > 0 && otherEntries.length > 0 && fmtCfg.showSeparator) {
+                suggestions.push({
+                  label: { label: "─────────────────", description: "其他表" },
+                  kind: monaco.languages.CompletionItemKind.Snippet,
+                  tags: [monaco.languages.CompletionItemTag.Deprecated],
+                  insertText: "${0}",
+                  insertTextRules:
+                    monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                  range: groupRange,
+                  sortText: `b_${gKey}_\u0000sep`,
+                  filterText: `${trigger}${gKey}`,
+                  preselect: false,
+                });
+              }
+              for (const e of otherEntries) suggestions.push(makeGroupItem(e, gKey, false));
+            }
+            return { suggestions };
+          }
+          return { suggestions: [] };
+        }
+
+        // ── 点号补全：alias.<cursor> → 仅返回该表/别名的字段 ──
+        const dotMatch = /([A-Za-z_][\w$]*)\.\s*([\w$]*)$/.exec(before);
 
         if (dotMatch) {
           const alias = dotMatch[1].toUpperCase();
@@ -915,42 +1464,85 @@ export default function App() {
           return { suggestions: [] };
         }
 
-        // 否则：返回所有表名 + 所有字段（粗筛，最多 200 个字段以免过载）
-        const tables: Monaco.languages.CompletionItem[] = catalog.map((t) => ({
-          label: t.qualifiedName ?? t.table,
-          kind: monaco.languages.CompletionItemKind.Class,
-          insertText: t.qualifiedName ?? t.table,
-          range,
-          detail: `表 · ${t.fields.length} 字段`,
-          documentation: t.comment ?? "",
-          sortText: `0_${t.table}`,
-        }));
-        const fields: Monaco.languages.CompletionItem[] = [];
+        // ── 普通补全：所有表名 + 字段（上下文表的字段优先排序） ──
+        const tables: Monaco.languages.CompletionItem[] = catalog.map((t) => {
+          const isCtx = contextTableSet.has(t.table.toUpperCase());
+          return {
+            label: t.qualifiedName ?? t.table,
+            kind: monaco.languages.CompletionItemKind.Class,
+            insertText: t.qualifiedName ?? t.table,
+            range,
+            detail: `${isCtx ? "📌 " : ""}表 · ${t.fields.length} 字段`,
+            documentation: t.comment ?? "",
+            sortText: isCtx ? `0_${t.table}` : `1_${t.table}`,
+          };
+        });
+        const ctxFields: Monaco.languages.CompletionItem[] = [];
+        const otherFields: Monaco.languages.CompletionItem[] = [];
         const seen = new Set<string>();
+        // 先把上下文表的字段加入
         for (const t of catalog) {
+          if (!contextTableSet.has(t.table.toUpperCase())) continue;
           for (const f of t.fields) {
             const key = f.toUpperCase();
             if (seen.has(key)) continue;
             seen.add(key);
             const info = t.fieldInfo?.[key];
-            fields.push({
+            ctxFields.push({
+              label: f,
+              kind: monaco.languages.CompletionItemKind.Field,
+              insertText: f,
+              range,
+              detail: `📌 ${t.table}${info?.type ? ` · ${info.type}` : ""}`,
+              documentation: info?.comment ?? "",
+              sortText: `a_${f}`,
+            });
+          }
+        }
+        // 再加其余表的字段，最多共 200 个
+        for (const t of catalog) {
+          if (contextTableSet.has(t.table.toUpperCase())) continue;
+          for (const f of t.fields) {
+            const key = f.toUpperCase();
+            if (seen.has(key)) continue;
+            seen.add(key);
+            const info = t.fieldInfo?.[key];
+            otherFields.push({
               label: f,
               kind: monaco.languages.CompletionItemKind.Field,
               insertText: f,
               range,
               detail: `${t.table}${info?.type ? ` · ${info.type}` : ""}`,
               documentation: info?.comment ?? "",
-              sortText: `1_${f}`,
+              sortText: `b_${f}`,
             });
-            if (fields.length >= 200) break;
+            if (otherFields.length >= 200) break;
           }
-          if (fields.length >= 200) break;
+          if (otherFields.length >= 200) break;
         }
-        return { suggestions: [...tables, ...fields] };
+        // 在上下文字段与其他字段之间插入分隔符
+        // 只在 word 为空时添加（无需 filterText 特技）；选中后用 snippet 不插入任何文字
+        const separator: Monaco.languages.CompletionItem[] =
+          ctxFields.length > 0 && otherFields.length > 0 && word.word === ""
+            ? [
+                {
+                  label: "─────── 其他表字段 ───────",
+                  kind: monaco.languages.CompletionItemKind.Text,
+                  insertText: "${0}",
+                  insertTextRules:
+                    monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                  range,
+                  detail: "",
+                  sortText: "b_\u0000sep",
+                  preselect: false,
+                },
+              ]
+            : [];
+        return { suggestions: [...tables, ...ctxFields, ...separator, ...otherFields] };
       },
     });
     return () => provider.dispose();
-  }, [monacoReadyTick, config.tableCatalog]);
+  }, [monacoReadyTick, config.tableCatalog, config.fieldGroupTrigger]);
 
   // 悬停：在表名 / 别名 / 字段上显示定义
   useEffect(() => {
@@ -1314,15 +1906,6 @@ export default function App() {
     return () => flushClear();
   }, [repositionMode, repositionSession, monacoReadyTick, sql]);
 
-  /** TEMP：验证词背景高亮 — 删除 monacoTempWordHighlight.ts、本 effect、index.css 中 `.sql-tool-temp-word-highlight` */
-  useEffect(() => {
-    const ed = editorRef.current;
-    const monaco = monacoRef.current;
-    if (!ed || !monaco || monacoReadyTick === 0) return;
-    const d = installTempWordHighlightTest(ed, monaco);
-    return () => d.dispose();
-  }, [monacoReadyTick]);
-
   useEffect(() => {
     const ed = editorRef.current;
     if (!ed || monacoReadyTick === 0) return;
@@ -1350,9 +1933,20 @@ export default function App() {
       if (!model || !pos) return;
       const t = model.getValue();
       const n = countSqlBlocks(t);
-      const idx = blockIndexAtOffset(t, model.getOffsetAt(pos));
+      const off = model.getOffsetAt(pos);
+      const idx = blockIndexAtOffset(t, off);
       setCurBlock({ i: idx + 1, n: Math.max(1, n) });
       setCursorLc({ line: pos.lineNumber, col: pos.column });
+      // 提取当前块中的 FROM/JOIN 表，用于搜索侧栏上下文感知
+      try {
+        const blocks = getSqlBlocks(t);
+        const b = blocks[idx];
+        const blockText = b ? t.slice(b.start, b.end) : t;
+        const aliasMap = extractAliasedTables(blockText);
+        setContextTableKeys([...aliasMap.keys()]);
+      } catch {
+        setContextTableKeys([]);
+      }
     };
     upd();
     const d1 = ed.onDidChangeCursorPosition(upd);
@@ -1605,6 +2199,7 @@ export default function App() {
       return (
         <SidebarSearch
           config={config}
+          contextTables={contextTableKeys}
           onPickTable={(q) => {
             const ed = editorRef.current;
             const model = ed?.getModel();
@@ -1650,7 +2245,13 @@ export default function App() {
         />
       );
     }
-    return <QuickInsertPanel config={config} setConfig={patchConfig} />;
+    return (
+      <QuickInsertPanel
+        config={config}
+        setConfig={patchConfig}
+        onNumberIconActivate={insertQuickInsertValueAtCursor}
+      />
+    );
   };
 
   return (
@@ -1695,12 +2296,7 @@ export default function App() {
           borderBottom: "1px solid var(--border)",
         }}
       >
-        <div style={{ fontWeight: 600, fontSize: 13 }}>
-          SQL Web Tool{" "}
-          <span style={{ color: "var(--text-muted)", fontWeight: 400 }}>
-            · DB2 / AS400
-          </span>
-        </div>
+        <div style={{ fontWeight: 600, fontSize: 13 }}>SQL Web Tool</div>
         <div style={{ flex: 1 }} />
         <label
           style={{
@@ -1873,6 +2469,15 @@ export default function App() {
               </>
             )}
           </div>
+          {phSession ? (
+            <PlaceholderAssistBar
+              session={phSession}
+              onChangeValue={setPlaceholderValue}
+              onApply={applyPlaceholderValue}
+              onJumpTo={jumpToPlaceholder}
+              onClose={closePhSession}
+            />
+          ) : null}
           <div style={{ flex: 1, minHeight: 200 }}>
             <Editor
               height="100%"
@@ -1883,6 +2488,8 @@ export default function App() {
                 editorRef.current = editor;
                 monacoRef.current = monaco;
                 setMonacoReadyTick((n) => n + 1);
+                // 默认展开智能提示的文档面板，让字段组等文档在 focus 时自动可见
+                editor.updateOptions({ suggest: { showStatusBar: true } });
               }}
               options={{
                 minimap: { enabled: false },
@@ -1985,18 +2592,6 @@ export default function App() {
           }}
         />
       </div>
-
-      <footer
-        style={{
-          padding: "8px 16px",
-          fontSize: 11,
-          color: "var(--text-muted)",
-          borderTop: "1px solid var(--border)",
-          background: "var(--bg-panel)",
-        }}
-      >
-        配置保存在 localStorage；「已存 SQL」单独持久化。File 菜单可导入/导出配置 JSON。
-      </footer>
 
       <RepositionInvalidCursorToast
         open={repositionInvalidHintOpen}

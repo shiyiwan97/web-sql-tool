@@ -71,6 +71,38 @@ export interface SqlSnippet {
   text: string;
 }
 
+/**
+ * 字段组智能提示的显示格式配置。
+ * 模板中可混合固定文字与占位符，占位符将被实际数据替换。
+ *
+ * 可用占位符：
+ *  - `{key}`      触发符 + 组名，如 `#combined-id`
+ *  - `{keyName}`  仅组名，如 `combined-id`
+ *  - `{table}`    表名，如 `GRADECLS`
+ *  - `{count}`    字段数量，如 `3`
+ *  - `{fields}`   完整字段列表（逗号分隔），如 `CLASS, STUDENT_ID`
+ *  - `{fields3}`  前 3 个字段（超出显示 …）
+ *  - `{fields5}`  前 5 个字段（超出显示 …）
+ *
+ * 固定文字示例：`来自 {table}` → `来自 GRADECLS`
+ */
+export interface FieldGroupCompletionFormat {
+  /** 补全行左侧（紧贴图标，主标签区域） */
+  left: string;
+  /** 补全行右侧（最右对齐，描述区域） */
+  right: string;
+  /** 是否在 FROM 表的组与其他表的组之间插入分隔线（补全项模拟，默认开启） */
+  showSeparator: boolean;
+}
+
+/** 字段组：把若干字段打包为一个可检索的组合键 */
+export interface FieldGroup {
+  /** 组的唯一标识符，例如 "combined-id" */
+  key: string;
+  /** 属于该组的字段名列表（大写） */
+  fields: string[];
+}
+
 export interface TableCatalogEntry {
   /** Logical table name (e.g. GRADECLS); may match DDS basename */
   table: string;
@@ -94,6 +126,8 @@ export interface TableCatalogEntry {
       isKey?: boolean;
     }
   >;
+  /** 字段组配置：可把若干字段打包成一个组合键，供搜索和 SQL 补全使用 */
+  fieldGroups?: FieldGroup[];
 }
 
 export interface RelationIndex {
@@ -139,6 +173,10 @@ export interface QuickInsertEntry {
   key: string;
   value: string;
   shortcut: string;
+  /** 行/序号图标背景色（CSS 颜色串）；空表示沿用面板默认 */
+  bgColor?: string;
+  /** 背景色作用范围：整行 or 仅序号图标。默认 "row" */
+  bgScope?: "row" | "icon";
 }
 
 export interface HotkeyConfig {
@@ -154,6 +192,12 @@ export interface HotkeyConfig {
   openSettings: string;
   /** 打开快捷键设置面板（全局生效） */
   openHotkeysSettings: string;
+  /** 打开「查看表」面板；空字符串表示不绑定 */
+  openTableCatalog: string;
+  /** 打开「表关系」面板；空字符串表示不绑定 */
+  openRelations: string;
+  /** 占位符会话：跳到下一个 ${} 占位符；空字符串表示不绑定（编辑器内 Enter/Tab 始终可用） */
+  nextPlaceholder: string;
   /**
    * Extend Selection（扩展选区）：与 IntelliJ IDEA 同名动作同类，映射 Monaco 智能扩选。
    * 默认 Ctrl+W，并在编辑器聚焦时避免触发浏览器关闭标签页。
@@ -205,6 +249,16 @@ export interface PanelButtonStyle extends PanelBoxStyle {
   label: string;
 }
 
+/** 上下文感知搜索时，"当前语句表"与"其他表"之间的分隔线样式 */
+export interface ContextDividerStyle {
+  /** 线条颜色；空字符串表示使用默认色 */
+  color: string;
+  /** 线条粗细（px） */
+  width: number;
+  /** 线条样式 */
+  style: "solid" | "dashed" | "dotted";
+}
+
 /** 搜索 / 查看表等面板共用的：主键字段旁标注（如 PK） */
 export interface SearchPanelPkBadgeStyle {
   /** 显示文案；空则显示 PK */
@@ -234,6 +288,8 @@ export interface SearchPanelStyle {
   fieldItemHeight: number;
   /** 注释/描述是否换行展示（false = 单行省略） */
   commentWrap: boolean;
+  /** 上下文感知时，"当前语句表"与"其他表"间的分隔线样式 */
+  contextDivider: ContextDividerStyle;
 }
 
 /** 快捷赋值面板：3 个输入框 + 3 个按钮 */
@@ -298,6 +354,25 @@ export interface AppConfig {
   theme: UiTheme;
   /** Debug 模式：展示更完整的状态栏信息 */
   debugMode: boolean;
+/**
+   * 字段组触发符：在搜索栏或 SQL 编辑器中输入该符号后接字段组 key，
+   * 即可检索/补全该组的所有字段。例如 "#" → 输入 "#combined-id" 触发。
+   */
+  fieldGroupTrigger: string;
+  /**
+   * 字段组补全项的显示格式配置。
+   * 用占位符自定义 Monaco 补全列表中每一行的左侧（主标签）和右侧（描述）内容。
+   */
+  fieldGroupCompletionFormat: FieldGroupCompletionFormat;
+  /**
+   * 「快捷赋值」侧栏每行前序号图标的交互方式。
+   *  - click    仅单击触发（带 250ms 去抖，双击不会重复触发）
+   *  - dblclick 仅双击触发（推荐，避免误触）
+   *  - both     单击和双击均触发，带去抖避免双击多次触发
+   *  - none     禁用（仅作展示）
+   * 触发时把对应行的「值」插入到编辑器光标处；若同时处于已存 SQL 占位符会话，插入后自动跳到下一个占位符。
+   */
+  quickInsertNumberIconBehavior: "click" | "dblclick" | "both" | "none";
   ddsCopybookPathGroups: DdsCopybookPathGroup[];
   tableResolution: { description: string };
   relations: TableRelation[];

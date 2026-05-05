@@ -188,11 +188,7 @@ body.find-widget-open .workbench-hover-container .hover-row {
   border: 1px solid var(--border) !important;
 }
 
-/* TEMP：Monaco 词高亮测试 — 与 monacoTempWordHighlight.ts 一并删除 */
-.monaco-editor .sql-tool-temp-word-highlight {
-  background-color: #ffeb3b !important;
-  color: #000000 !important;
-}
+
 
 /* 调整位置模式：非选中片段 / 当前选中 */
 .monaco-editor .sql-reposition-peer {
@@ -359,4 +355,16 @@ html[data-theme="light"] .reposition-vscode-notification-dropdown {
 .reposition-vscode-notification-menuitem:hover {
   background: var(--rn-dropdown-hover-bg);
   color: var(--rn-dropdown-hover-fg);
+}
+
+/* ─── 已存 SQL 占位符 ${} 高亮 ─── */
+.sqlwt-placeholder {
+  background: rgba(251, 191, 36, 0.18);
+  border-bottom: 1px dashed rgba(251, 191, 36, 0.7);
+  border-radius: 2px;
+}
+.sqlwt-placeholder-active {
+  background: rgba(251, 191, 36, 0.42) !important;
+  border-bottom: 1px solid #fbbf24 !important;
+  box-shadow: 0 0 0 1px rgba(251, 191, 36, 0.45) inset;
 }

@@ -18,6 +18,9 @@ const LABELS: Record<keyof HotkeyConfig, string> = {
   compressCurrentBlock: "压缩当前分号块",
   openSettings: "打开设置面板",
   openHotkeysSettings: "打开快捷键设置面板",
+  openTableCatalog: "打开「查看表」面板",
+  openRelations: "打开「表关系」面板",
+  nextPlaceholder: "占位符 · 跳到下一个",
   extendSelection: "Extend Selection",
   shrinkSelection: "Shrink Selection",
   repositionActivate: "调整位置 · 激活 / 结束会话",
@@ -56,6 +59,19 @@ const CAPTURE_META: Record<keyof HotkeyConfig, { title: string; description?: Re
   openHotkeysSettings: {
     title: "绑定：打开快捷键设置面板",
     description: "在编辑器内/外按下都会唤起本快捷键面板；默认 Ctrl+Alt+H。",
+  },
+  openTableCatalog: {
+    title: "绑定：打开「查看表」面板",
+    description: "在编辑器内/外按下都会唤起「查看表」Modal。默认不绑定，可自行设置。",
+  },
+  openRelations: {
+    title: "绑定：打开「表关系」面板",
+    description: "在编辑器内/外按下都会唤起「表关系」Modal。默认不绑定，可自行设置。",
+  },
+  nextPlaceholder: {
+    title: "绑定：跳到下一个占位符",
+    description:
+      "插入含 ${} 占位符的「已存 SQL」后启动占位符会话；按下此键把当前占位符的值写入并跳到下一个。在编辑器内 Enter / Tab 始终可用，本快捷键用于在编辑器外（如「快捷赋值」栏）触发推进。默认不绑定。",
   },
   extendSelection: {
     title: "绑定：Extend Selection",
@@ -221,8 +237,18 @@ export function HotkeysSettingsModal({
             <HotkeyRow k="saveEditorSql" />
             <HotkeyRow k="compressLineOrSelection" />
             <HotkeyRow k="compressCurrentBlock" />
+
+            <SectionTitle spanGrid>面板操作</SectionTitle>
             <HotkeyRow k="openSettings" />
             <HotkeyRow k="openHotkeysSettings" />
+            <HotkeyRow k="openTableCatalog" />
+            <HotkeyRow k="openRelations" />
+
+            <SectionTitle spanGrid>已存 SQL · 占位符</SectionTitle>
+            <HotkeyRow
+              k="nextPlaceholder"
+              detail="插入含 ${} 占位符的「已存 SQL」后启动会话：按下推进到下一个占位符。在编辑器内 Enter / Tab 始终可用。"
+            />
 
             <SectionTitle spanGrid>选区（智能扩选）</SectionTitle>
             <HotkeyRow

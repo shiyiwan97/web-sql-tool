@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import type { AppConfig, TableCatalogEntry } from "../types";
+import type { AppConfig, FieldGroup, TableCatalogEntry } from "../types";
 import { pkBadgeResolved, styleFromText } from "./PanelStyleModal";
 import { TableCatalogCsvImportModal } from "./TableCatalogCsvImportModal";
 
@@ -39,6 +39,18 @@ export function TableCatalogModal({ open, config, onClose, onOpenStyle, patchCon
   const [importModalOpen, setImportModalOpen] = useState(false);
   const importMenuRef = useRef<HTMLDivElement>(null);
   const ps = config.panelStyles.tableCatalog;
+
+  // --- 字段组编辑状态 ---
+  const [newGroupKey, setNewGroupKey] = useState("");
+  const [newGroupFields, setNewGroupFields] = useState<string[]>([]);
+  const [editingGroupIdx, setEditingGroupIdx] = useState<number | null>(null);
+
+  // 切换表时重置字段组编辑状态
+  useEffect(() => {
+    setNewGroupKey("");
+    setNewGroupFields([]);
+    setEditingGroupIdx(null);
+  }, [activeTable]);
 
   useEffect(() => {
     if (!open) return;
@@ -337,6 +349,27 @@ export function TableCatalogModal({ open, config, onClose, onOpenStyle, patchCon
                     </tbody>
                   </table>
                 </div>
+
+                {/* 字段组配置 */}
+                <FieldGroupsSection
+                  active={active}
+                  allFields={active.fields}
+                  trigger={config.fieldGroupTrigger}
+                  newGroupKey={newGroupKey}
+                  setNewGroupKey={setNewGroupKey}
+                  newGroupFields={newGroupFields}
+                  setNewGroupFields={setNewGroupFields}
+                  editingGroupIdx={editingGroupIdx}
+                  setEditingGroupIdx={setEditingGroupIdx}
+                  onSave={(groups) => {
+                    patchConfig((c) => ({
+                      ...c,
+                      tableCatalog: c.tableCatalog.map((t) =>
+                        t.table !== active.table ? t : { ...t, fieldGroups: groups },
+                      ),
+                    }));
+                  }}
+                />
               </div>
             )}
           </main>
@@ -352,6 +385,321 @@ export function TableCatalogModal({ open, config, onClose, onOpenStyle, patchCon
     </div>
   );
 }
+
+// ──────────────────────────────────────────────
+// 字段组配置子组件
+// ──────────────────────────────────────────────
+
+type FieldGroupsSectionProps = {
+  active: TableCatalogEntry;
+  allFields: string[];
+  trigger: string;
+  newGroupKey: string;
+  setNewGroupKey: (v: string) => void;
+  newGroupFields: string[];
+  setNewGroupFields: (v: string[]) => void;
+  editingGroupIdx: number | null;
+  setEditingGroupIdx: (v: number | null) => void;
+  onSave: (groups: FieldGroup[]) => void;
+};
+
+function FieldGroupsSection({
+  active,
+  allFields,
+  trigger,
+  newGroupKey,
+  setNewGroupKey,
+  newGroupFields,
+  setNewGroupFields,
+  editingGroupIdx,
+  setEditingGroupIdx,
+  onSave,
+}: FieldGroupsSectionProps) {
+  const groups: FieldGroup[] = active.fieldGroups ?? [];
+
+  const toggleField = (f: string) => {
+    const upper = f.toUpperCase();
+    setNewGroupFields(
+      newGroupFields.includes(upper)
+        ? newGroupFields.filter((x) => x !== upper)
+        : [...newGroupFields, upper],
+    );
+  };
+
+  const startEdit = (idx: number) => {
+    const g = groups[idx];
+    if (!g) return;
+    setEditingGroupIdx(idx);
+    setNewGroupKey(g.key);
+    setNewGroupFields([...g.fields]);
+  };
+
+  const cancelEdit = () => {
+    setEditingGroupIdx(null);
+    setNewGroupKey("");
+    setNewGroupFields([]);
+  };
+
+  const isDuplicateKey = (key: string): boolean => {
+    const lower = key.trim().toLowerCase();
+    return groups.some(
+      (g, i) => g.key.toLowerCase() === lower && i !== editingGroupIdx,
+    );
+  };
+
+  const commitGroup = () => {
+    const key = newGroupKey.trim();
+    if (!key || newGroupFields.length === 0) return;
+    if (isDuplicateKey(key)) return;
+    const next = [...groups];
+    if (editingGroupIdx !== null) {
+      next[editingGroupIdx] = { key, fields: [...newGroupFields] };
+    } else {
+      next.push({ key, fields: [...newGroupFields] });
+    }
+    onSave(next);
+    cancelEdit();
+  };
+
+  const deleteGroup = (idx: number) => {
+    const next = groups.filter((_, i) => i !== idx);
+    onSave(next.length > 0 ? next : []);
+  };
+
+  return (
+    <div style={{ marginTop: 20 }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 10,
+        }}
+      >
+        <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>
+          字段组
+        </div>
+        <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
+          触发符：<code style={{ fontFamily: "var(--mono)", color: "#93c5fd" }}>{trigger}</code>
+          &thinsp;·&thinsp;搜索时输入{" "}
+          <code style={{ fontFamily: "var(--mono)", color: "#fbbf24" }}>{trigger}组名</code>{" "}
+          可检索该组所有字段
+        </div>
+      </div>
+
+      {/* 已有分组列表 */}
+      {groups.length > 0 ? (
+        <div style={{ display: "grid", gap: 8, marginBottom: 12 }}>
+          {groups.map((g, idx) => (
+            <div
+              key={idx}
+              style={{
+                padding: "8px 12px",
+                borderRadius: 8,
+                border: `1px solid ${editingGroupIdx === idx ? "rgba(59,130,246,0.6)" : "var(--border)"}`,
+                background: "var(--bg-app)",
+                display: "flex",
+                alignItems: "flex-start",
+                gap: 10,
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 4 }}>
+                  <code
+                    style={{
+                      fontFamily: "var(--mono)",
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: "#fbbf24",
+                    }}
+                  >
+                    {trigger}{g.key}
+                  </code>
+                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                    {g.fields.length} 个字段
+                  </span>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                  {g.fields.map((f) => (
+                    <code
+                      key={f}
+                      style={{
+                        fontSize: 11,
+                        fontFamily: "var(--mono)",
+                        padding: "1px 6px",
+                        borderRadius: 4,
+                        border: "1px solid var(--border)",
+                        background: "var(--bg-elevated)",
+                        color: "#a7f3d0",
+                      }}
+                    >
+                      {f}
+                    </code>
+                  ))}
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 4, flexShrink: 0 }}>
+                <button
+                  type="button"
+                  style={btnSm}
+                  onClick={() => startEdit(idx)}
+                  title="编辑该字段组"
+                >
+                  编辑
+                </button>
+                <button
+                  type="button"
+                  style={{ ...btnSm, color: "#f87171" }}
+                  onClick={() => deleteGroup(idx)}
+                  title="删除该字段组"
+                >
+                  ×
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div
+          style={{
+            ...hintStyle,
+            padding: 10,
+            border: "1px dashed var(--border)",
+            borderRadius: 8,
+            marginBottom: 12,
+          }}
+        >
+          暂无字段组。在下方添加第一个。
+        </div>
+      )}
+
+      {/* 新增 / 编辑表单 */}
+      <div
+        style={{
+          padding: 12,
+          border: "1px solid var(--border)",
+          borderRadius: 8,
+          background: "var(--bg-panel)",
+        }}
+      >
+        <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text)", marginBottom: 8 }}>
+          {editingGroupIdx !== null ? `编辑字段组 #${editingGroupIdx + 1}` : "新增字段组"}
+        </div>
+        <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+          <label style={{ fontSize: 11, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+            组名（key）
+          </label>
+          <input
+            type="text"
+            placeholder="例如：combined-id"
+            value={newGroupKey}
+            onChange={(e) => setNewGroupKey(e.target.value)}
+            style={{
+              flex: 1,
+              padding: "6px 8px",
+              fontSize: 12,
+              fontFamily: "var(--mono)",
+              borderRadius: 6,
+              border: "1px solid var(--border)",
+              background: "var(--bg-app)",
+              color: "var(--text)",
+              outline: "none",
+            }}
+          />
+          <span style={{ fontSize: 11, color: "var(--text-muted)", whiteSpace: "nowrap" }}>
+            搜索触发：
+            <code style={{ color: "#fbbf24", fontFamily: "var(--mono)" }}>
+              {trigger}{newGroupKey || "…"}
+            </code>
+          </span>
+        </div>
+
+        <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 6 }}>
+          勾选该组包含的字段（已选 {newGroupFields.length} 个）：
+        </div>
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: 6,
+            maxHeight: 160,
+            overflowY: "auto",
+            padding: 4,
+          }}
+        >
+          {allFields.map((f) => {
+            const upper = f.toUpperCase();
+            const checked = newGroupFields.includes(upper);
+            return (
+              <label
+                key={f}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  fontSize: 11,
+                  fontFamily: "var(--mono)",
+                  padding: "3px 8px",
+                  borderRadius: 5,
+                  border: `1px solid ${checked ? "rgba(59,130,246,0.6)" : "var(--border)"}`,
+                  background: checked ? "rgba(59,130,246,0.12)" : "var(--bg-app)",
+                  color: checked ? "#93c5fd" : "var(--text)",
+                  cursor: "pointer",
+                  userSelect: "none",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  onChange={() => toggleField(f)}
+                  style={{ width: 12, height: 12, accentColor: "#3b82f6" }}
+                />
+                {f}
+              </label>
+            );
+          })}
+        </div>
+
+        {newGroupKey.trim() && isDuplicateKey(newGroupKey) ? (
+          <div style={{ fontSize: 11, color: "#f87171", marginTop: 6 }}>
+            ⚠ 该表已存在 key 为「{newGroupKey.trim()}」的字段组，请使用不同的名称。
+          </div>
+        ) : null}
+        <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+          <button
+            type="button"
+            style={{
+              ...btnSm,
+              background:
+                newGroupKey.trim() && newGroupFields.length > 0 && !isDuplicateKey(newGroupKey)
+                  ? "rgba(59,130,246,0.2)"
+                  : undefined,
+              borderColor:
+                newGroupKey.trim() && newGroupFields.length > 0 && !isDuplicateKey(newGroupKey)
+                  ? "rgba(59,130,246,0.5)"
+                  : undefined,
+            }}
+            disabled={!newGroupKey.trim() || newGroupFields.length === 0 || isDuplicateKey(newGroupKey)}
+            onClick={commitGroup}
+          >
+            {editingGroupIdx !== null ? "保存修改" : "添加字段组"}
+          </button>
+          {editingGroupIdx !== null ? (
+            <button type="button" style={btnSm} onClick={cancelEdit}>
+              取消
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const hintStyle: CSSProperties = {
+  fontSize: 11,
+  color: "var(--text-muted)",
+  lineHeight: 1.5,
+};
 
 const backdrop: CSSProperties = {
   position: "fixed",

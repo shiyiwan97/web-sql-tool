@@ -256,6 +256,60 @@ function SearchEditor({
         value={value.typeMappings}
         onChange={(m) => onChange({ ...value, typeMappings: m })}
       />
+
+      <Group title="上下文感知分隔线">
+        <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 8 }}>
+          当搜索栏感知到当前 SQL 块的 FROM/JOIN 表时，在「当前语句表」与「其他表」之间绘制一条分隔线。
+        </div>
+        <div style={{ ...fieldRow, alignItems: "center", flexWrap: "wrap" }}>
+          <div style={fieldLabel}>颜色</div>
+          <ColorInput
+            value={value.contextDivider.color}
+            onChange={(c) =>
+              onChange({ ...value, contextDivider: { ...value.contextDivider, color: c } })
+            }
+          />
+        </div>
+        <div style={{ ...fieldRow, alignItems: "center" }}>
+          <div style={fieldLabel}>粗细（px）</div>
+          <NumberInput
+            label="px"
+            value={value.contextDivider.width}
+            onChange={(n) =>
+              onChange({ ...value, contextDivider: { ...value.contextDivider, width: n } })
+            }
+            min={1}
+            max={10}
+          />
+        </div>
+        <div style={{ ...fieldRow, alignItems: "center" }}>
+          <div style={fieldLabel}>线型</div>
+          <select
+            style={{ ...inputStyle, width: 120 }}
+            value={value.contextDivider.style}
+            onChange={(e) =>
+              onChange({
+                ...value,
+                contextDivider: {
+                  ...value.contextDivider,
+                  style: e.target.value as "solid" | "dashed" | "dotted",
+                },
+              })
+            }
+          >
+            <option value="solid">实线</option>
+            <option value="dashed">虚线</option>
+            <option value="dotted">点线</option>
+          </select>
+        </div>
+        <div
+          style={{
+            marginTop: 6,
+            borderTop: `${Math.max(1, value.contextDivider.width)}px ${value.contextDivider.style} ${value.contextDivider.color || "#86efac"}`,
+          }}
+          aria-hidden
+        />
+      </Group>
     </div>
   );
 }

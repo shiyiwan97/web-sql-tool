@@ -1,6 +1,8 @@
 import type {
   AppConfig,
+  ContextDividerStyle,
   EditorAppearance,
+  FieldGroup,
   HotkeyConfig,
   PanelBoxStyle,
   PanelButtonStyle,
@@ -21,6 +23,13 @@ export function createDefaultConfig(): AppConfig {
     version: 1,
     theme: "dark",
     debugMode: false,
+    fieldGroupTrigger: "#",
+    fieldGroupCompletionFormat: {
+      left: "{key}",
+      right: "{table}: {fields5}",
+      showSeparator: true,
+    },
+    quickInsertNumberIconBehavior: "dblclick",
     ddsCopybookPathGroups: [
       {
         order: 0,
@@ -63,6 +72,9 @@ export function createDefaultConfig(): AppConfig {
       compressCurrentBlock: "Ctrl+Shift+Backspace",
       openSettings: "Ctrl+Alt+,",
       openHotkeysSettings: "Ctrl+Alt+H",
+      openTableCatalog: "",
+      openRelations: "",
+      nextPlaceholder: "",
       extendSelection: "Ctrl+W",
       shrinkSelection: "Ctrl+Shift+W",
       repositionActivate: "Ctrl+Shift+M",
@@ -129,6 +141,11 @@ export function createDefaultPanelStyles(): PanelStyles {
       color: "#facc15",
       backgroundColor: "rgba(250,204,21,0.15)",
       borderColor: "rgba(250,204,21,0.4)",
+    },
+    contextDivider: {
+      color: "#86efac",
+      width: 1,
+      style: "dashed",
     },
   };
   const tableCatalog: TableCatalogPanelStyle = {
@@ -227,6 +244,30 @@ export function normalizeConfig(raw: unknown): AppConfig {
       typeof o.relationIndex === "object" && o.relationIndex
         ? (o.relationIndex as AppConfig["relationIndex"])
         : base.relationIndex,
+    fieldGroupTrigger:
+      typeof o.fieldGroupTrigger === "string" && o.fieldGroupTrigger.length > 0
+        ? o.fieldGroupTrigger
+        : base.fieldGroupTrigger,
+    fieldGroupCompletionFormat: (() => {
+      const f = o.fieldGroupCompletionFormat as Record<string, unknown> | undefined;
+      return {
+        left: typeof f?.left === "string" ? f.left : base.fieldGroupCompletionFormat.left,
+        right: typeof f?.right === "string" ? f.right : base.fieldGroupCompletionFormat.right,
+        showSeparator:
+          typeof f?.showSeparator === "boolean"
+            ? f.showSeparator
+            : base.fieldGroupCompletionFormat.showSeparator,
+      };
+    })(),
+    quickInsertNumberIconBehavior: (() => {
+      // 兼容旧字段名 placeholderNumberIconBehavior
+      const v =
+        o.quickInsertNumberIconBehavior ??
+        (o as Record<string, unknown>).placeholderNumberIconBehavior;
+      return v === "click" || v === "dblclick" || v === "both" || v === "none"
+        ? v
+        : base.quickInsertNumberIconBehavior;
+    })(),
     tableCatalog: Array.isArray(o.tableCatalog)
       ? (o.tableCatalog as TableCatalogInput[]).map((t) => ({
           table: String(t.table ?? "").toUpperCase(),
@@ -242,6 +283,7 @@ export function normalizeConfig(raw: unknown): AppConfig {
             : undefined,
           estimatedRowCount: normalizeEstimatedRowCount(t.estimatedRowCount),
           fieldInfo: normalizeFieldInfo(t.fieldInfo),
+          fieldGroups: normalizeFieldGroups(t.fieldGroups),
         }))
       : base.tableCatalog,
     sidebarLayout: normalizeSidebarLayout(o.sidebarLayout, base.sidebarLayout),
@@ -327,6 +369,7 @@ function normalizePanelStyles(raw: unknown, fb: PanelStyles): PanelStyles {
         typeof s.fieldItemHeight === "number" ? Math.max(0, s.fieldItemHeight) : fb.search.fieldItemHeight,
       commentWrap: typeof s.commentWrap === "boolean" ? s.commentWrap : fb.search.commentWrap,
       primaryKeyBadge: normalizePrimaryKeyBadge(s.primaryKeyBadge, fb.search.primaryKeyBadge),
+      contextDivider: normalizeContextDivider(s.contextDivider, fb.search.contextDivider),
     },
     tableCatalog: {
       tableName: normalizeText(tc.tableName, fb.tableCatalog.tableName),
@@ -406,6 +449,7 @@ type TableCatalogInput = {
     string,
     { comment?: unknown; type?: unknown; length?: unknown; precision?: unknown; isKey?: unknown }
   >;
+  fieldGroups?: unknown;
 };
 
 function normalizeEstimatedRowCount(raw: unknown): number | undefined {
@@ -568,11 +612,15 @@ function normalizeQuickInserts(
   if (!Array.isArray(raw)) return [...fallback];
   return raw.map((e, i) => {
     const o = e as Record<string, unknown>;
+    const scope = o.bgScope === "icon" ? "icon" : "row";
+    const bgColor = typeof o.bgColor === "string" && o.bgColor ? o.bgColor : undefined;
     return {
       id: String(o.id ?? `qi-${i}`),
       key: String(o.key ?? ""),
       value: String(o.value ?? ""),
       shortcut: String(o.shortcut ?? ""),
+      bgColor,
+      bgScope: scope,
     };
   });
 }
@@ -615,6 +663,9 @@ function normalizeHotkeys(raw: unknown, fallback: HotkeyConfig): HotkeyConfig {
     ),
     openSettings: String(h.openSettings ?? fallback.openSettings),
     openHotkeysSettings: String(h.openHotkeysSettings ?? fallback.openHotkeysSettings),
+    openTableCatalog: String(h.openTableCatalog ?? fallback.openTableCatalog),
+    openRelations: String(h.openRelations ?? fallback.openRelations),
+    nextPlaceholder: String(h.nextPlaceholder ?? fallback.nextPlaceholder),
     extendSelection: String(h.extendSelection ?? fallback.extendSelection),
     shrinkSelection: String(h.shrinkSelection ?? fallback.shrinkSelection),
     repositionActivate: String(h.repositionActivate ?? fallback.repositionActivate),
@@ -635,6 +686,34 @@ function normalizeHotkeys(raw: unknown, fallback: HotkeyConfig): HotkeyConfig {
       h.repositionShrinkRemoveNext ?? fallback.repositionShrinkRemoveNext,
     ),
   };
+}
+
+function normalizeContextDivider(raw: unknown, fb: ContextDividerStyle): ContextDividerStyle {
+  const o = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
+  const allowed: Array<ContextDividerStyle["style"]> = ["solid", "dashed", "dotted"];
+  return {
+    color: typeof o.color === "string" ? o.color : fb.color,
+    width: typeof o.width === "number" && o.width >= 0 ? Math.round(o.width) : fb.width,
+    style: (allowed as string[]).includes(o.style as string)
+      ? (o.style as ContextDividerStyle["style"])
+      : fb.style,
+  };
+}
+
+function normalizeFieldGroups(raw: unknown): FieldGroup[] | undefined {
+  if (!Array.isArray(raw)) return undefined;
+  const out: FieldGroup[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const o = item as Record<string, unknown>;
+    const key = typeof o.key === "string" ? o.key.trim() : "";
+    if (!key) continue;
+    const fields = Array.isArray(o.fields)
+      ? o.fields.map((f) => String(f).toUpperCase()).filter(Boolean)
+      : [];
+    out.push({ key, fields });
+  }
+  return out.length > 0 ? out : undefined;
 }
 
 function normalizeCardinality(c: string | undefined): AppConfig["relations"][0]["cardinality"] {
