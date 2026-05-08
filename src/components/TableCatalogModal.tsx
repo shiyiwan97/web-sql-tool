@@ -1,4 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import {
+  useDeferredValue,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ReactNode,
+} from "react";
 import type { AppConfig, FieldGroup, TableCatalogEntry } from "../types";
 import { pkBadgeResolved, styleFromText } from "./PanelStyleModal";
 import { TableCatalogCsvImportModal } from "./TableCatalogCsvImportModal";
@@ -11,20 +20,23 @@ type Props = {
   patchConfig: (fn: (c: AppConfig) => AppConfig) => void;
 };
 
-function tableMatchesCatalogSearch(t: TableCatalogEntry, NU: string): boolean {
-  if (!NU) return true;
-  const U = (s: string) => s.toUpperCase();
-  if (U(t.table).includes(NU)) return true;
-  if (U(t.qualifiedName ?? "").includes(NU)) return true;
-  if (U(String(t.comment ?? "")).includes(NU)) return true;
+/**
+ * 把一张表的所有可搜文本拼成一个大写字符串，便于一次性 includes 匹配。
+ * 这样在 4000 表 / 23 万字段规模下，搜索只需要 4000 次 String#includes，
+ * 而不是 4000 × 平均字段数 次 toUpperCase + includes。
+ */
+function buildTableHaystack(t: TableCatalogEntry): string {
+  const parts: string[] = [t.table];
+  if (t.qualifiedName) parts.push(t.qualifiedName);
+  if (t.comment) parts.push(String(t.comment));
   const fi = t.fieldInfo ?? {};
   for (const f of t.fields) {
-    const F = String(f).toUpperCase();
-    if (F.includes(NU)) return true;
-    const cm = String(fi[F]?.comment ?? "").toUpperCase();
-    if (cm.includes(NU)) return true;
+    parts.push(f);
+    const c = fi[String(f).toUpperCase()]?.comment;
+    if (c) parts.push(String(c));
   }
-  return false;
+  // \u0001 作为分隔符，确保不会跨字段误匹配（除非用户真的搜了控制字符）
+  return parts.join("\u0001").toUpperCase();
 }
 
 /** 左侧有关键字且命中字段名时，右侧为该字段行加背景（由样式配置） */
@@ -64,10 +76,30 @@ export function TableCatalogModal({ open, config, onClose, onOpenStyle, patchCon
   }, [open, importMenuOpen]);
 
   const NU = q.trim().toUpperCase();
+  // 输入卡顿大头：搜索一改，4000 表全过一遍。用 deferred 让 UI 先响应，再异步过滤。
+  const deferredNU = useDeferredValue(NU);
 
-  const filtered = useMemo(
-    () => config.tableCatalog.filter((t) => tableMatchesCatalogSearch(t, NU)),
-    [config.tableCatalog, NU],
+  // 一次性为每张表预生成大写可搜文本，避免每次按键都跑 23 万次 toUpperCase。
+  const searchIndex = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const t of config.tableCatalog) m.set(t.table, buildTableHaystack(t));
+    return m;
+  }, [config.tableCatalog]);
+
+  const filtered = useMemo(() => {
+    if (!deferredNU) return config.tableCatalog;
+    const out: TableCatalogEntry[] = [];
+    for (const t of config.tableCatalog) {
+      const hay = searchIndex.get(t.table);
+      if (hay && hay.includes(deferredNU)) out.push(t);
+    }
+    return out;
+  }, [config.tableCatalog, deferredNU, searchIndex]);
+
+  // 表头计数缓存，避免每次 render 都 reduce 4000 张表。
+  const totalFieldCount = useMemo(
+    () => config.tableCatalog.reduce((acc, t) => acc + t.fields.length, 0),
+    [config.tableCatalog],
   );
 
   useEffect(() => {
@@ -121,8 +153,7 @@ export function TableCatalogModal({ open, config, onClose, onOpenStyle, patchCon
           <div style={{ display: "flex", flexDirection: "column", gap: 2, minWidth: 0 }}>
             <div style={{ fontSize: 12, fontWeight: 800 }}>查看表</div>
             <div style={{ fontSize: 11, color: "var(--text-muted)" }}>
-              共 {config.tableCatalog.length} 张表 · 字段总数{" "}
-              {config.tableCatalog.reduce((acc, t) => acc + t.fields.length, 0)}
+              共 {config.tableCatalog.length} 张表 · 字段总数 {totalFieldCount}
             </div>
           </div>
           <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
@@ -192,34 +223,11 @@ export function TableCatalogModal({ open, config, onClose, onOpenStyle, patchCon
               onChange={(e) => setQ(e.target.value)}
               style={inputStyle}
             />
-            <div style={{ display: "grid", gap: 6, marginTop: 8 }}>
-              {filtered.length === 0 ? (
-                <div style={{ ...hint, padding: 10, border: "1px dashed var(--border)", borderRadius: 8 }}>
-                  无匹配表
-                </div>
-              ) : (
-                filtered.map((t) => (
-                  <button
-                    key={t.table}
-                    type="button"
-                    style={{
-                      ...listItem,
-                      borderColor: t.table === activeTable ? "rgba(59,130,246,0.6)" : "var(--border)",
-                    }}
-                    onClick={() => setActiveTable(t.table)}
-                  >
-                    <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text)" }}>
-                      {t.qualifiedName ?? t.table}
-                    </div>
-                    <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
-                      {t.comment ? t.comment + " · " : ""}
-                      {t.fields.length} 个字段
-                      {t.primaryKeys && t.primaryKeys.length > 0 ? ` · PK ${t.primaryKeys.length}` : ""}
-                    </div>
-                  </button>
-                ))
-              )}
-            </div>
+            <VirtualTableList
+              filtered={filtered}
+              activeTable={activeTable}
+              onPick={setActiveTable}
+            />
           </aside>
 
           <main style={right}>
@@ -382,6 +390,115 @@ export function TableCatalogModal({ open, config, onClose, onOpenStyle, patchCon
         config={config}
         patchConfig={patchConfig}
       />
+    </div>
+  );
+}
+
+// ──────────────────────────────────────────────
+// 左侧表列表的轻量窗口化（避免 4000 表一次性全渲染）
+// ──────────────────────────────────────────────
+
+const ROW_H = 58; // 单行 52px 内容 + 6px 行间距
+const OVERSCAN = 6;
+
+function VirtualTableList({
+  filtered,
+  activeTable,
+  onPick,
+}: {
+  filtered: TableCatalogEntry[];
+  activeTable: string;
+  onPick: (table: string) => void;
+}) {
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const [scrollTop, setScrollTop] = useState(0);
+  const [viewportH, setViewportH] = useState(800);
+  const [offsetTop, setOffsetTop] = useState(0);
+
+  useLayoutEffect(() => {
+    const el = wrapperRef.current;
+    if (!el) return;
+    const scroller = el.parentElement; // <aside>，本身就是滚动容器
+    if (!scroller) return;
+    const update = () => {
+      setScrollTop(scroller.scrollTop);
+      setViewportH(scroller.clientHeight);
+      setOffsetTop(el.offsetTop);
+    };
+    update();
+    scroller.addEventListener("scroll", update, { passive: true });
+    const ro = new ResizeObserver(update);
+    ro.observe(scroller);
+    return () => {
+      scroller.removeEventListener("scroll", update);
+      ro.disconnect();
+    };
+  }, []);
+
+  const total = filtered.length;
+  if (total === 0) {
+    return (
+      <div ref={wrapperRef} style={{ marginTop: 8 }}>
+        <div
+          style={{
+            ...hint,
+            padding: 10,
+            border: "1px dashed var(--border)",
+            borderRadius: 8,
+          }}
+        >
+          无匹配表
+        </div>
+      </div>
+    );
+  }
+
+  const visibleStart = Math.max(0, scrollTop - offsetTop);
+  const startIdx = Math.max(0, Math.floor(visibleStart / ROW_H) - OVERSCAN);
+  const endIdx = Math.min(
+    total,
+    Math.ceil((visibleStart + viewportH) / ROW_H) + OVERSCAN,
+  );
+
+  const items: ReactNode[] = [];
+  for (let i = startIdx; i < endIdx; i++) {
+    const t = filtered[i]!;
+    items.push(
+      <button
+        key={t.table}
+        type="button"
+        style={{
+          ...listItem,
+          position: "absolute",
+          top: i * ROW_H,
+          left: 0,
+          right: 0,
+          height: ROW_H - 6,
+          borderColor:
+            t.table === activeTable ? "rgba(59,130,246,0.6)" : "var(--border)",
+        }}
+        onClick={() => onPick(t.table)}
+      >
+        <div style={{ fontSize: 12, fontWeight: 700, color: "var(--text)" }}>
+          {t.qualifiedName ?? t.table}
+        </div>
+        <div style={{ fontSize: 11, color: "var(--text-muted)", marginTop: 2 }}>
+          {t.comment ? t.comment + " · " : ""}
+          {t.fields.length} 个字段
+          {t.primaryKeys && t.primaryKeys.length > 0
+            ? ` · PK ${t.primaryKeys.length}`
+            : ""}
+        </div>
+      </button>,
+    );
+  }
+
+  return (
+    <div
+      ref={wrapperRef}
+      style={{ position: "relative", height: total * ROW_H, marginTop: 8 }}
+    >
+      {items}
     </div>
   );
 }

@@ -24,11 +24,13 @@ export function createDefaultConfig(): AppConfig {
     theme: "dark",
     debugMode: false,
     fieldGroupTrigger: "#",
+    tableGroupTrigger: "$",
     fieldGroupCompletionFormat: {
       left: "{key}",
       right: "{table}: {fields5}",
       showSeparator: true,
     },
+    globalSearchGroups: [],
     quickInsertNumberIconBehavior: "dblclick",
     ddsCopybookPathGroups: [
       {
@@ -248,6 +250,10 @@ export function normalizeConfig(raw: unknown): AppConfig {
       typeof o.fieldGroupTrigger === "string" && o.fieldGroupTrigger.length > 0
         ? o.fieldGroupTrigger
         : base.fieldGroupTrigger,
+    tableGroupTrigger:
+      typeof o.tableGroupTrigger === "string" && o.tableGroupTrigger.length > 0
+        ? o.tableGroupTrigger
+        : base.tableGroupTrigger,
     fieldGroupCompletionFormat: (() => {
       const f = o.fieldGroupCompletionFormat as Record<string, unknown> | undefined;
       return {
@@ -258,6 +264,43 @@ export function normalizeConfig(raw: unknown): AppConfig {
             ? f.showSeparator
             : base.fieldGroupCompletionFormat.showSeparator,
       };
+    })(),
+    globalSearchGroups: (() => {
+      const arr = (o as Record<string, unknown>).globalSearchGroups;
+      if (!Array.isArray(arr)) return base.globalSearchGroups;
+      const out: AppConfig["globalSearchGroups"] = [];
+      const seenKeys = new Set<string>();
+      for (const item of arr) {
+        if (!item || typeof item !== "object") continue;
+        const rec = item as Record<string, unknown>;
+        const key = typeof rec.key === "string" ? rec.key.trim() : "";
+        if (!key) continue;
+        const dedupKey = key.toLowerCase();
+        if (seenKeys.has(dedupKey)) continue;
+        seenKeys.add(dedupKey);
+        let kws: string[] = [];
+        if (Array.isArray(rec.keywords)) {
+          kws = (rec.keywords as unknown[])
+            .map((k) => (typeof k === "string" ? k.trim() : ""))
+            .filter((k) => k.length > 0);
+        } else if (typeof rec.keywords === "string") {
+          kws = String(rec.keywords)
+            .split(/[,，]/)
+            .map((k) => k.trim())
+            .filter((k) => k.length > 0);
+        }
+        // 去重（保持顺序，按大小写不敏感）
+        const seenKw = new Set<string>();
+        const dedupKws: string[] = [];
+        for (const kw of kws) {
+          const u = kw.toLowerCase();
+          if (seenKw.has(u)) continue;
+          seenKw.add(u);
+          dedupKws.push(kw);
+        }
+        out.push({ key, keywords: dedupKws });
+      }
+      return out;
     })(),
     quickInsertNumberIconBehavior: (() => {
       // 兼容旧字段名 placeholderNumberIconBehavior

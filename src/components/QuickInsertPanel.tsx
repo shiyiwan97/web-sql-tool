@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useRef, useState, memo, type CSSProperties } from "react";
 import type { AppConfig, PanelBoxStyle, QuickInsertEntry } from "../types";
 import { ShortcutCaptureModal } from "./ShortcutCaptureModal";
 import { styleFromBox } from "./PanelStyleModal";
@@ -144,19 +144,13 @@ export function QuickInsertPanel({
                   setPaletteFor({ id: r.id, x: e.clientX, y: e.clientY })
                 }
               />
-              <input
-                className="input"
-                style={{ ...inp, ...wrap(ps.keyInput, "key") }}
-                placeholder="键名"
-                value={r.key}
-                onChange={(e) => updateRow(r.id, { key: e.target.value })}
-              />
-              <input
-                className="input"
-                style={{ ...inp, ...wrap(ps.valueInput, "value") }}
-                placeholder="值"
-                value={r.value}
-                onChange={(e) => updateRow(r.id, { value: e.target.value })}
+              <RowTextInputs
+                keyValue={r.key}
+                valueValue={r.value}
+                keyStyle={{ ...inp, ...wrap(ps.keyInput, "key") }}
+                valueStyle={{ ...inp, ...wrap(ps.valueInput, "value") }}
+                onCommitKey={(v) => { if (v !== r.key) updateRow(r.id, { key: v }); }}
+                onCommitValue={(v) => { if (v !== r.value) updateRow(r.id, { value: v }); }}
               />
               <input
                 className="input"
@@ -400,6 +394,56 @@ export function QuickInsertPanel({
     </div>
   );
 }
+
+/**
+ * 键名 + 值 两个输入框，用本地 draft 状态隔离，仅在失焦（onBlur）或按 Enter 时
+ * 向上提交变更，避免每次击键都触发全局 patchConfig → 全量渲染。
+ */
+const RowTextInputs = memo(function RowTextInputs({
+  keyValue,
+  valueValue,
+  keyStyle,
+  valueStyle,
+  onCommitKey,
+  onCommitValue,
+}: {
+  keyValue: string;
+  valueValue: string;
+  keyStyle: CSSProperties;
+  valueStyle: CSSProperties;
+  onCommitKey: (v: string) => void;
+  onCommitValue: (v: string) => void;
+}) {
+  const [kDraft, setKDraft] = useState(keyValue);
+  const [vDraft, setVDraft] = useState(valueValue);
+
+  // 外部 config 导入或重置时同步（例如 JSON 导入、恢复默认）
+  useEffect(() => { setKDraft(keyValue); }, [keyValue]);
+  useEffect(() => { setVDraft(valueValue); }, [valueValue]);
+
+  return (
+    <>
+      <input
+        className="input"
+        style={keyStyle}
+        placeholder="键名"
+        value={kDraft}
+        onChange={(e) => setKDraft(e.target.value)}
+        onBlur={() => onCommitKey(kDraft)}
+        onKeyDown={(e) => { if (e.key === "Enter") onCommitKey(kDraft); }}
+      />
+      <input
+        className="input"
+        style={valueStyle}
+        placeholder="值"
+        value={vDraft}
+        onChange={(e) => setVDraft(e.target.value)}
+        onBlur={() => onCommitValue(vDraft)}
+        onKeyDown={(e) => { if (e.key === "Enter") onCommitValue(vDraft); }}
+      />
+    </>
+  );
+});
 
 /**
  * 行首序号图标按钮：根据 behavior 决定单击 / 双击触发；右键弹出调色板（外部 onContextMenu）。

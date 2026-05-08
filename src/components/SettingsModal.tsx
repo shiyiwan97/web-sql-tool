@@ -16,6 +16,7 @@ import type {
 import { normalizeConfig } from "../lib/configDefaults";
 import { applySqlFormatting } from "../lib/sqlEditorOps";
 import { getOrCreateUserId, setUserId } from "../lib/configBlocks";
+import { GlobalSearchGroupsModal } from "./GlobalSearchGroupsModal";
 
 type Props = {
   open: boolean;
@@ -238,6 +239,7 @@ export function SettingsModal({
     warnings: true,
     json: false,
   });
+  const [globalGroupsModalOpen, setGlobalGroupsModalOpen] = useState(false);
 
   const jsonBlockRef = useRef<HTMLDivElement>(null);
   const lastTick = useRef(0);
@@ -504,6 +506,29 @@ export function SettingsModal({
               </p>
 
               <div style={{ marginTop: 12 }}>
+                <label style={lbl2}>表组触发符</label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
+                  <input
+                    type="text"
+                    style={{ ...inp, width: 72, fontFamily: "var(--mono)" }}
+                    value={draft.tableGroupTrigger ?? "$"}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      if (v.length > 0) setDraft((d) => ({ ...d, tableGroupTrigger: v }));
+                    }}
+                    placeholder="$"
+                  />
+                  <span style={{ fontSize: 11, color: "var(--text-muted)" }}>
+                    在搜索栏输入&thinsp;
+                    <code style={{ fontFamily: "var(--mono)", color: "#fbbf24" }}>
+                      {draft.tableGroupTrigger ?? "$"}组名
+                    </code>
+                    &thinsp;可按全局搜索组的关键词搜索<strong>表名 / 表注释</strong>（搜索栏 + 编辑器智能提示均生效，结果展示整张表含所有字段）。与字段组触发符不同时各自独立触发。
+                  </span>
+                </div>
+              </div>
+
+              <div style={{ marginTop: 12 }}>
                 <label style={lbl2}>字段组触发符</label>
                 <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 4 }}>
                   <input
@@ -630,6 +655,28 @@ export function SettingsModal({
                     </span>
                   </label>
                 </div>
+              </div>
+
+              <div style={{ marginTop: 12 }}>
+                <label style={lbl2}>全局搜索组</label>
+                <div style={{ fontSize: 11, color: "var(--text-muted)", marginBottom: 8 }}>
+                  与「字段组」共用触发符&thinsp;
+                  <code style={{ fontFamily: "var(--mono)", color: "#fbbf24" }}>
+                    {draft.fieldGroupTrigger}
+                  </code>
+                  &thinsp;。输入触发符 + 组名后，搜索栏与编辑器智能提示会用该组所有关键词匹配
+                  表名 / 表注释 / 字段名 / 字段注释；表级命中在前、字段级命中在后。
+                  当前已配置&thinsp;
+                  <strong>{(draft.globalSearchGroups ?? []).length}</strong>
+                  &thinsp;个搜索组。
+                </div>
+                <button
+                  type="button"
+                  style={btnSm}
+                  onClick={() => setGlobalGroupsModalOpen(true)}
+                >
+                  配置搜索组…
+                </button>
               </div>
 
               <div style={{ marginTop: 12 }}>
@@ -903,6 +950,16 @@ export function SettingsModal({
             </p>
           </AccordionSection>
         </div>
+
+        <GlobalSearchGroupsModal
+          open={globalGroupsModalOpen}
+          groups={draft.globalSearchGroups ?? []}
+          trigger={draft.fieldGroupTrigger ?? "#"}
+          onClose={() => setGlobalGroupsModalOpen(false)}
+          onSave={(updated) =>
+            setDraft((d) => ({ ...d, globalSearchGroups: updated }))
+          }
+        />
 
         <div style={modalFooter}>
           <button type="button" style={btn} onClick={onClose}>

@@ -28,7 +28,7 @@ import type {
   QuickInsertEntry,
   SqlCompressLevel,
 } from "./types";
-import { loadConfigBundle, saveConfigBundle } from "./lib/storage";
+import { loadConfigBundle, loadConfigBundleAsync, saveConfigBundle } from "./lib/storage";
 import { resolveConfig, type ConfigBundle, normalizeBundle } from "./lib/configBundle";
 import {
   CONFIG_BLOCK_KEYS,
@@ -50,6 +50,8 @@ import {
   collectUniqueJoinDriverMessages,
   computeJoinDriverMarkerOffsets,
 } from "./lib/sqlJoinDriverMarkers";
+import { getCatalogIndex } from "./lib/catalogIndex";
+import { findGlobalSearchGroupsByPrefix, matchGlobalSearchGroup } from "./lib/globalSearchGroup";
 import { normalizeConfig } from "./lib/configDefaults";
 import {
   blockIndexAtOffset,
@@ -148,6 +150,12 @@ export default function App() {
     return c;
   });
   const [sql, setSql] = useState(() => loadWorkspaceState()?.sql ?? DEFAULT_SQL);
+  // 用于触发诊断（JOIN 警告）的 debounced SQL；大目录下避免每键阻塞输入
+  const [sqlForDiagnostics, setSqlForDiagnostics] = useState(sql);
+  useEffect(() => {
+    const t = window.setTimeout(() => setSqlForDiagnostics(sql), 250);
+    return () => window.clearTimeout(t);
+  }, [sql]);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [hotkeysOpen, setHotkeysOpen] = useState(false);
   const [commandMenuOpen, setCommandMenuOpen] = useState(false);
@@ -375,12 +383,12 @@ export default function App() {
   const joinDriverIssues = useMemo(
     () =>
       collectUniqueJoinDriverMessages(
-        sql,
+        sqlForDiagnostics,
         config.tableCatalog,
         config.sqlDiagnosticsSettings,
         config.relations,
       ),
-    [sql, config.tableCatalog, config.sqlDiagnosticsSettings, config.relations],
+    [sqlForDiagnostics, config.tableCatalog, config.sqlDiagnosticsSettings, config.relations],
   );
 
   useEffect(() => {
@@ -425,7 +433,24 @@ export default function App() {
   const phDecorationIdsRef = useRef<string[]>([]);
   const prevLineBreakRef = useRef<"soft" | "hard">(config.sqlFormatting.editorLineBreak);
   const autoHardWrapRef = useRef(false);
+  /** IDB hydration 完成前不要把"默认 bundle"回写覆盖真实数据 */
+  const bundleHydratedRef = useRef(false);
   useEffect(() => {
+    let cancelled = false;
+    void loadConfigBundleAsync().then((b) => {
+      if (cancelled) return;
+      setBundle(b);
+      const c = resolveConfig(b);
+      document.documentElement.dataset.theme = c.theme;
+      setConfig(c);
+      bundleHydratedRef.current = true;
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  useEffect(() => {
+    if (!bundleHydratedRef.current) return;
     saveConfigBundle(bundle);
   }, [bundle]);
 
@@ -758,7 +783,7 @@ export default function App() {
     const next = applySqlFormatting(model?.getValue() ?? sql, config.sqlFormatting);
     pendingEditorCursorOffsetRef.current = Math.min(prevOff, Math.max(0, next.length));
     setSql(next);
-  }, [config.sqlFormatting.editorLineBreak, config.sqlFormatting, sql]);
+  }, [config.sqlFormatting.editorLineBreak, config.sqlFormatting]);
 
   const computeSqlToSaveFromEditor = useCallback((): string => {
     const ed = editorRef.current;
@@ -1276,13 +1301,14 @@ export default function App() {
         const before = lineText.slice(0, position.column - 1);
         const catalog = configRef.current.tableCatalog;
         const trigger = configRef.current.fieldGroupTrigger ?? "#";
+        const tableTriggerChar = configRef.current.tableGroupTrigger ?? "$";
+        const idx = getCatalogIndex(catalog);
 
         // ── 别名映射 + 上下文表集合（提前计算，供字段组和普通补全共用） ──
         const aliasMap = new Map<string, string>(); // alias / table → table key
-        for (const t of catalog) {
-          aliasMap.set(t.table.toUpperCase(), t.table);
-          if (t.qualifiedName) aliasMap.set(t.qualifiedName.toUpperCase(), t.table);
-        }
+        // 通过预建索引一次拿到 (UPPER name → entry)，避免每键扫一遍 catalog
+        for (const [k, t] of idx.byKey) aliasMap.set(k, t.table);
+        for (const [q, t] of idx.byQualified) aliasMap.set(q, t.table);
         let contextTableSet = new Set<string>(); // 当前块的表名 key，用于排序优先级
         try {
           const fullText = model.getValue();
@@ -1294,7 +1320,7 @@ export default function App() {
           const blockAliasMap = extractAliasedTables(blockText);
           contextTableSet = new Set(blockAliasMap.keys());
           for (const [tk, alias] of blockAliasMap) {
-            const hit = catalog.find((t) => t.table.toUpperCase() === tk);
+            const hit = idx.byKey.get(tk);
             if (hit) aliasMap.set(alias.toUpperCase(), hit.table);
           }
           const re = /\b(?:FROM|JOIN)\s+([\w.]+)\s+(?:AS\s+)?([A-Za-z_][\w$]*)/gi;
@@ -1303,19 +1329,84 @@ export default function App() {
             const tableRef = m[1].toUpperCase();
             const alias = m[2].toUpperCase();
             const baseName = tableRef.split(".").pop() ?? tableRef;
-            const hit = catalog.find((t) => t.table.toUpperCase() === baseName);
+            const hit = idx.byKey.get(baseName);
             if (hit) aliasMap.set(alias, hit.table);
           }
         } catch {
           // ignore
         }
 
-        // ── 字段组补全：触发符 + 组名 ──
+        // ── 表组补全：tableGroupTrigger + 组名 → 只搜表名/表注释 ──
+        const escapedTableTrigger = tableTriggerChar.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+        const tableGroupTriggerRe = new RegExp(`${escapedTableTrigger}([\\w-]*)$`);
+        const tableGroupTriggerMatch = tableGroupTriggerRe.exec(before);
+        if (tableGroupTriggerMatch && tableTriggerChar !== trigger) {
+          // 只在两个触发符不同时才单独处理；相同时下方字段组分支会合并
+          const typedKey = tableGroupTriggerMatch[1].toLowerCase();
+          const tTriggerStart = word.startColumn - tableTriggerChar.length;
+          const tableGroupRange: Monaco.IRange = {
+            startLineNumber: position.lineNumber,
+            endLineNumber: position.lineNumber,
+            startColumn: Math.max(1, tTriggerStart),
+            endColumn: position.column,
+          };
+          const ggListT = configRef.current.globalSearchGroups ?? [];
+          const matchedGGsT = findGlobalSearchGroupsByPrefix(typedKey, ggListT);
+          const showSep = (configRef.current.fieldGroupCompletionFormat?.showSeparator ?? true);
+          const tableSuggestions: Monaco.languages.CompletionItem[] = [];
+          for (const gg of matchedGGsT) {
+            const hits = matchGlobalSearchGroup(gg, catalog, 200, "table");
+            if (hits.tableHits.length === 0) continue;
+            const filterText = `${tableTriggerChar}${gg.key}`;
+            const ctxHits = hits.tableHits.filter((th) => contextTableSet.has(th.entry.table.toUpperCase()));
+            const otherHits = hits.tableHits.filter((th) => !contextTableSet.has(th.entry.table.toUpperCase()));
+            const allHits = [...ctxHits, ...otherHits];
+            const hasCtx = ctxHits.length > 0;
+            const insertAllTables = allHits.map((th) => th.entry.qualifiedName ?? th.entry.table).join(", ");
+            const names5 = allHits.slice(0, 5).map((th) => th.entry.table).join(", ")
+              + (allHits.length > 5 ? ` …+${allHits.length - 5}` : "");
+            const tableRows = allHits.map((th) => {
+              const e = th.entry;
+              const mark = contextTableSet.has(e.table.toUpperCase()) ? " 📌" : "";
+              return `| \`${e.qualifiedName ?? e.table}\`${mark} | ${e.comment ?? ""} |`;
+            }).join("\n");
+            const docValue = `**全局表组** \`${tableTriggerChar}${gg.key}\`\n\n关键词：${gg.keywords.join(", ")}\n\n| 表名 | 注释 |\n|:-----|:------|\n${tableRows}`;
+            const nbspify = (s: string) => s.replace(/ /g, "\u00a0");
+            tableSuggestions.push({
+              label: { label: nbspify(`${tableTriggerChar}${gg.key}`), description: nbspify(`${hasCtx ? "📌\u00a0" : ""}表\u00a0·\u00a0${allHits.length}\u00a0·\u00a0${names5}`) },
+              kind: monaco.languages.CompletionItemKind.Snippet,
+              insertText: insertAllTables,
+              range: tableGroupRange,
+              documentation: { value: docValue },
+              sortText: `d_${gg.key}_${hasCtx ? "a" : "c"}`,
+              filterText,
+            });
+            void showSep; // used in field-scope below; keep for consistency
+          }
+          if (tableSuggestions.length > 0) return { suggestions: tableSuggestions };
+        }
+
+        // ── 字段组补全：触发符 + 组名（同时检索"全局搜索组"字段模式）──
         const escapedTrigger = trigger.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
         const groupTriggerRe = new RegExp(`${escapedTrigger}([\\w-]*)$`);
         const groupTriggerMatch = groupTriggerRe.exec(before);
         if (groupTriggerMatch) {
           const typedKey = groupTriggerMatch[1].toLowerCase();
+          // 计算替换范围：覆盖触发符 + 已输入的内容（字段组与全局搜索组共用）
+          const triggerStart = word.startColumn - trigger.length;
+          const groupRange: Monaco.IRange = {
+            startLineNumber: position.lineNumber,
+            endLineNumber: position.lineNumber,
+            startColumn: Math.max(1, triggerStart),
+            endColumn: position.column,
+          };
+          const fmtCfg = configRef.current.fieldGroupCompletionFormat ?? {
+            left: "{key}",
+            right: "{table}: {fields5}",
+            showSeparator: true,
+          };
+
+          // ① 表级字段组（已有逻辑）
           const groupKeySet = new Map<string, { table: string; fields: string[] }[]>();
           for (const t of catalog) {
             for (const g of t.fieldGroups ?? []) {
@@ -1324,20 +1415,9 @@ export default function App() {
               groupKeySet.get(g.key)!.push({ table: t.table, fields: g.fields });
             }
           }
-          if (groupKeySet.size > 0) {
-            const fmtCfg = configRef.current.fieldGroupCompletionFormat ?? {
-              left: "{key}",
-              right: "{table}: {fields5}",
-            };
-            // 计算替换范围：覆盖触发符 + 已输入的内容
-            const triggerStart = word.startColumn - trigger.length;
-            const groupRange: Monaco.IRange = {
-              startLineNumber: position.lineNumber,
-              endLineNumber: position.lineNumber,
-              startColumn: Math.max(1, triggerStart),
-              endColumn: position.column,
-            };
+          const suggestions: Monaco.languages.CompletionItem[] = [];
 
+          if (groupKeySet.size > 0) {
             const applyFmt = (
               template: string,
               vars: { key: string; keyName: string; table: string; count: string; fields: string; fields3: string; fields5: string }
@@ -1357,7 +1437,7 @@ export default function App() {
               isCtx: boolean
             ): Monaco.languages.CompletionItem => {
               const insertFields = entry.fields.join(", ");
-              const tableEntry = catalog.find((t) => t.table === entry.table);
+              const tableEntry = idx.byKey.get(entry.table.toUpperCase());
               const fields3 =
                 entry.fields.slice(0, 3).join(", ") +
                 (entry.fields.length > 3 ? ` …+${entry.fields.length - 3}` : "");
@@ -1373,12 +1453,9 @@ export default function App() {
                 fields3,
                 fields5,
               };
-              // 把普通空格转为 NBSP（\u00a0），避免 Monaco 补全列表的 HTML 文本节点
-              // 因 white-space:normal 将多个空格合并或首尾空格被去掉
               const nbspify = (s: string) => s.replace(/ /g, "\u00a0");
               const leftLabel = nbspify(applyFmt(fmtCfg.left, formatVars));
               const rightLabel = nbspify(applyFmt(fmtCfg.right, formatVars));
-              // 简洁文档：只保留字段明细表
               const fieldRows = entry.fields
                 .map((f) => {
                   const info = tableEntry?.fieldInfo?.[f.toUpperCase()];
@@ -1390,7 +1467,6 @@ export default function App() {
                 .join("\n");
               const docValue = `| 字段 | 类型 | 注释 |\n|:-----|:-----|:------|\n${fieldRows}`;
               return {
-                // label = 最左侧，description = 最右侧（真正右对齐）
                 label: { label: leftLabel, description: rightLabel },
                 kind: monaco.languages.CompletionItemKind.Snippet,
                 insertText: insertFields,
@@ -1401,7 +1477,6 @@ export default function App() {
               };
             };
 
-            const suggestions: Monaco.languages.CompletionItem[] = [];
             for (const [gKey, entries] of groupKeySet) {
               const ctxEntries = entries.filter((e) =>
                 contextTableSet.has(e.table.toUpperCase())
@@ -1410,11 +1485,6 @@ export default function App() {
                 (e) => !contextTableSet.has(e.table.toUpperCase())
               );
               for (const e of ctxEntries) suggestions.push(makeGroupItem(e, gKey, true));
-              // 上下文组与其他组之间的分隔符（可在设置中关闭）
-              // Monaco 无原生分隔符 API（issue #1077 closed），用 Deprecated Snippet 项模拟：
-              //   - Snippet kind → 与组项图标相同（□），避免出现 "abc"
-              //   - Deprecated tag → 灰色删除线，视觉上与可选项明显区分
-              //   - insertText "${0}" → 选中后不插入任何内容
               if (ctxEntries.length > 0 && otherEntries.length > 0 && fmtCfg.showSeparator) {
                 suggestions.push({
                   label: { label: "─────────────────", description: "其他表" },
@@ -1431,9 +1501,71 @@ export default function App() {
               }
               for (const e of otherEntries) suggestions.push(makeGroupItem(e, gKey, false));
             }
-            return { suggestions };
           }
-          return { suggestions: [] };
+
+          // ② 全局搜索组（跨表跨字段关键词包）— 按表分组，每表一条 Snippet
+          const ggList = configRef.current.globalSearchGroups ?? [];
+          const matchedGGs = findGlobalSearchGroupsByPrefix(typedKey, ggList);
+          for (const gg of matchedGGs) {
+            const hits = matchGlobalSearchGroup(gg, catalog, 200, "field");
+            const ggKey = gg.key;
+            const filterText = `${trigger}${ggKey}`;
+            const ctxFieldHits = hits.fieldHits.filter((fh) =>
+              contextTableSet.has(fh.entry.table.toUpperCase()),
+            );
+            const otherFieldHits = hits.fieldHits.filter(
+              (fh) => !contextTableSet.has(fh.entry.table.toUpperCase()),
+            );
+            // 每张命中表生成一条 Snippet（所有命中字段逗号拼接），文档显示字段明细表
+            const makeTableFieldItem = (
+              fh: { entry: typeof catalog[number]; fields: string[]; matchedKeywords: string[] },
+              isCtx: boolean,
+            ): Monaco.languages.CompletionItem => {
+              const e = fh.entry;
+              const insertText = fh.fields.join(", ");
+              const fields5 = fh.fields.slice(0, 5).join(", ")
+                + (fh.fields.length > 5 ? ` …+${fh.fields.length - 5}` : "");
+              const nbspify = (s: string) => s.replace(/ /g, "\u00a0");
+              const leftLabel = nbspify(`${trigger}${ggKey}`);
+              const rightLabel = nbspify(`${isCtx ? "📌\u00a0" : ""}${e.table}:\u00a0${fields5}`);
+              const fieldRows = fh.fields.map((f) => {
+                const info = e.fieldInfo?.[f.toUpperCase()];
+                const typStr = info?.type
+                  ? `${info.type}${info.length != null ? `(${info.length}${info.precision ? "," + info.precision : ""})` : ""}`
+                  : "";
+                return `| \`${f}\` | ${typStr} | ${info?.comment ?? ""} |`;
+              }).join("\n");
+              const docValue = `**全局字段组** \`${trigger}${ggKey}\` → \`${e.table}\`\n\n命中关键词：${fh.matchedKeywords.join(", ")}\n\n| 字段 | 类型 | 注释 |\n|:-----|:-----|:------|\n${fieldRows}`;
+              return {
+                label: { label: leftLabel, description: rightLabel },
+                kind: monaco.languages.CompletionItemKind.Snippet,
+                insertText,
+                range: groupRange,
+                documentation: { value: docValue },
+                sortText: isCtx
+                  ? `e_${ggKey}_f_a_${e.table}`
+                  : `e_${ggKey}_f_c_${e.table}`,
+                filterText,
+              };
+            };
+            for (const fh of ctxFieldHits) suggestions.push(makeTableFieldItem(fh, true));
+            if (ctxFieldHits.length > 0 && otherFieldHits.length > 0 && fmtCfg.showSeparator) {
+              suggestions.push({
+                label: { label: "─────────────────", description: `全局组·其他表字段` },
+                kind: monaco.languages.CompletionItemKind.Snippet,
+                tags: [monaco.languages.CompletionItemTag.Deprecated],
+                insertText: "${0}",
+                insertTextRules: monaco.languages.CompletionItemInsertTextRule.InsertAsSnippet,
+                range: groupRange,
+                sortText: `e_${ggKey}_f_b_\u0000sep`,
+                filterText,
+                preselect: false,
+              });
+            }
+            for (const fh of otherFieldHits) suggestions.push(makeTableFieldItem(fh, false));
+          }
+
+          return { suggestions };
         }
 
         // ── 点号补全：alias.<cursor> → 仅返回该表/别名的字段 ──
@@ -1442,7 +1574,7 @@ export default function App() {
         if (dotMatch) {
           const alias = dotMatch[1].toUpperCase();
           const base = aliasMap.get(alias);
-          const table = base ? catalog.find((t) => t.table === base) : undefined;
+          const table = base ? idx.byKey.get(base.toUpperCase()) : undefined;
           if (table) {
             const suggestions: Monaco.languages.CompletionItem[] = table.fields.map((f) => {
               const info = table.fieldInfo?.[f.toUpperCase()];
@@ -1465,9 +1597,13 @@ export default function App() {
         }
 
         // ── 普通补全：所有表名 + 字段（上下文表的字段优先排序） ──
-        const tables: Monaco.languages.CompletionItem[] = catalog.map((t) => {
+        // 大目录下补全列表本身的渲染也会拖慢 IME；当用户已输入字符让 Monaco 过滤时，
+        // 提供完整列表才有意义；空字符触发时硬限上限。
+        const TABLE_CAP = 800;
+        const tables: Monaco.languages.CompletionItem[] = [];
+        for (const t of catalog) {
           const isCtx = contextTableSet.has(t.table.toUpperCase());
-          return {
+          tables.push({
             label: t.qualifiedName ?? t.table,
             kind: monaco.languages.CompletionItemKind.Class,
             insertText: t.qualifiedName ?? t.table,
@@ -1475,13 +1611,17 @@ export default function App() {
             detail: `${isCtx ? "📌 " : ""}表 · ${t.fields.length} 字段`,
             documentation: t.comment ?? "",
             sortText: isCtx ? `0_${t.table}` : `1_${t.table}`,
-          };
-        });
+          });
+          if (tables.length >= TABLE_CAP && !isCtx) break;
+        }
         const ctxFields: Monaco.languages.CompletionItem[] = [];
         const otherFields: Monaco.languages.CompletionItem[] = [];
         const seen = new Set<string>();
+        // 大目录下完整字段列表对补全意义不大，做硬上限避免每键阻塞
+        const CTX_FIELD_CAP = 500;
+        const OTHER_FIELD_CAP = 200;
         // 先把上下文表的字段加入
-        for (const t of catalog) {
+        outerCtx: for (const t of catalog) {
           if (!contextTableSet.has(t.table.toUpperCase())) continue;
           for (const f of t.fields) {
             const key = f.toUpperCase();
@@ -1497,10 +1637,11 @@ export default function App() {
               documentation: info?.comment ?? "",
               sortText: `a_${f}`,
             });
+            if (ctxFields.length >= CTX_FIELD_CAP) break outerCtx;
           }
         }
-        // 再加其余表的字段，最多共 200 个
-        for (const t of catalog) {
+        // 再加其余表的字段，最多共 OTHER_FIELD_CAP 个
+        outerOther: for (const t of catalog) {
           if (contextTableSet.has(t.table.toUpperCase())) continue;
           for (const f of t.fields) {
             const key = f.toUpperCase();
@@ -1516,9 +1657,8 @@ export default function App() {
               documentation: info?.comment ?? "",
               sortText: `b_${f}`,
             });
-            if (otherFields.length >= 200) break;
+            if (otherFields.length >= OTHER_FIELD_CAP) break outerOther;
           }
-          if (otherFields.length >= 200) break;
         }
         // 在上下文字段与其他字段之间插入分隔符
         // 只在 word 为空时添加（无需 filterText 特技）；选中后用 snippet 不插入任何文字
@@ -1542,7 +1682,7 @@ export default function App() {
       },
     });
     return () => provider.dispose();
-  }, [monacoReadyTick, config.tableCatalog, config.fieldGroupTrigger]);
+  }, [monacoReadyTick, config.tableCatalog, config.fieldGroupTrigger, config.tableGroupTrigger, config.globalSearchGroups]);
 
   // 悬停：在表名 / 别名 / 字段上显示定义
   useEffect(() => {
@@ -1617,14 +1757,22 @@ export default function App() {
 
     const tableMarkdown = (t: AppConfig["tableCatalog"][number]): string => {
       const summary = tableHoverSummary(t);
-      const rows: Array<[boolean, string, string, string]> = t.fields.map((f) => {
+      // 大表（>200 字段）只显示前 200 行 + 省略提示，避免悬停时构建上千行 Markdown
+      const HOVER_FIELD_CAP = 200;
+      const truncated = t.fields.length > HOVER_FIELD_CAP;
+      const fieldsToShow = truncated ? t.fields.slice(0, HOVER_FIELD_CAP) : t.fields;
+      const rows: Array<[boolean, string, string, string]> = fieldsToShow.map((f) => {
         const info = t.fieldInfo?.[f.toUpperCase()];
         const isKey = catalogFieldIsPk(t, f);
         const ty = formatType(info);
         const cmm = info?.comment ?? "";
         return [isKey, f, ty, cmm];
       });
-      return joinHoverSummaryAndFieldTable(summary, hoverTableFieldTypeComment(rows));
+      let md = joinHoverSummaryAndFieldTable(summary, hoverTableFieldTypeComment(rows));
+      if (truncated) {
+        md += `<br/>_…仅显示前 ${HOVER_FIELD_CAP} / ${t.fields.length} 个字段_`;
+      }
+      return md;
     };
 
     const fieldMarkdown = (
@@ -1676,17 +1824,12 @@ export default function App() {
         };
         const catalog = configRef.current.tableCatalog;
         if (catalog.length === 0) return null;
+        const idx = getCatalogIndex(catalog);
 
         // 解析全文别名表
         const aliasMap = new Map<string, string>(); // ALIAS / TABLE_BASENAME → table.table
-        for (const t of catalog) {
-          aliasMap.set(t.table.toUpperCase(), t.table);
-          if (t.qualifiedName) {
-            aliasMap.set(t.qualifiedName.toUpperCase(), t.table);
-            const last = t.qualifiedName.split(".").pop();
-            if (last) aliasMap.set(last.toUpperCase(), t.table);
-          }
-        }
+        for (const [k, t] of idx.byKey) aliasMap.set(k, t.table);
+        for (const [q, t] of idx.byQualified) aliasMap.set(q, t.table);
         try {
           const fullText = model.getValue();
           const re = /\b(?:FROM|JOIN)\s+([\w.]+)\s+(?:AS\s+)?([A-Za-z_][\w$]*)/gi;
@@ -1695,7 +1838,7 @@ export default function App() {
             const tableRef = m[1].toUpperCase();
             const alias = m[2].toUpperCase();
             const baseName = tableRef.split(".").pop() ?? tableRef;
-            const hit = catalog.find((t) => t.table.toUpperCase() === baseName);
+            const hit = idx.byKey.get(baseName);
             if (hit) aliasMap.set(alias, hit.table);
           }
         } catch {
@@ -1709,7 +1852,7 @@ export default function App() {
         if (aliasMatch) {
           const aliasU = aliasMatch[1].toUpperCase();
           const tableKey = aliasMap.get(aliasU);
-          const table = tableKey ? catalog.find((t) => t.table === tableKey) : undefined;
+          const table = tableKey ? idx.byKey.get(tableKey.toUpperCase()) : undefined;
           if (table && table.fields.some((f) => f.toUpperCase() === wordU)) {
             const fieldName = table.fields.find((f) => f.toUpperCase() === wordU)!;
             return {
@@ -1722,7 +1865,7 @@ export default function App() {
         // 检查是否是表名 / 限定名 / 别名
         const tableKey = aliasMap.get(wordU);
         if (tableKey) {
-          const table = catalog.find((t) => t.table === tableKey);
+          const table = idx.byKey.get(tableKey.toUpperCase());
           if (table) {
             return {
               range,
@@ -1731,11 +1874,9 @@ export default function App() {
           }
         }
 
-        // 裸字段名：列出所有含此字段的表
-        const matches = catalog.filter((t) =>
-          t.fields.some((f) => f.toUpperCase() === wordU),
-        );
-        if (matches.length > 0) {
+        // 裸字段名：列出所有含此字段的表（用预建倒排索引，O(1) 命中）
+        const matches = idx.fieldToTables.get(wordU);
+        if (matches && matches.length > 0) {
           if (matches.length === 1 && matches[0]) {
             const t = matches[0];
             const fieldName = t.fields.find((f) => f.toUpperCase() === wordU)!;
@@ -1839,7 +1980,7 @@ export default function App() {
     const model = ed?.getModel();
     if (!ed || !monaco || !model || monacoReadyTick === 0) return;
     const offs = computeJoinDriverMarkerOffsets(
-      sql,
+      sqlForDiagnostics,
       config.tableCatalog,
       config.sqlDiagnosticsSettings,
       config.relations,
@@ -1861,7 +2002,7 @@ export default function App() {
     });
     monaco.editor.setModelMarkers(model, "join-driver", markers);
     return () => monaco.editor.setModelMarkers(model, "join-driver", []);
-  }, [sql, config.tableCatalog, config.sqlDiagnosticsSettings, config.relations, monacoReadyTick]);
+  }, [sqlForDiagnostics, config.tableCatalog, config.sqlDiagnosticsSettings, config.relations, monacoReadyTick]);
 
   /** 调整位置：红 / 绿行内高亮 */
   useEffect(() => {
@@ -1955,7 +2096,7 @@ export default function App() {
       d1.dispose();
       d2.dispose();
     };
-  }, [monacoReadyTick, sql]);
+  }, [monacoReadyTick]);
 
   useEffect(() => {
     const editor = editorRef.current;

@@ -21,6 +21,7 @@ export const CONFIG_BLOCK_KEYS = [
   "quickInserts",
   "hotkeys",
   "panelStyles",
+  "globalSearchGroups",
 ] as const;
 
 export type ConfigBlockKey = (typeof CONFIG_BLOCK_KEYS)[number];
@@ -41,6 +42,7 @@ export const CONFIG_BLOCK_LABELS: Record<ConfigBlockKey, string> = {
   quickInserts: "快捷赋值",
   hotkeys: "快捷键",
   panelStyles: "面板样式",
+  globalSearchGroups: "全局搜索组",
 };
 
 export type ConfigBlockMeta = {

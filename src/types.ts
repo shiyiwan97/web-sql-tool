@@ -103,6 +103,26 @@ export interface FieldGroup {
   fields: string[];
 }
 
+/**
+ * 全局搜索组：跨表 / 跨字段的"关键词包"。
+ * 与字段组（FieldGroup）的区别：
+ *   - 字段组配置在某张具体的表上，是该表的某些字段的命名集合。
+ *   - 全局搜索组是用户层面的关键词集合，触发后会用其中每个关键词去匹配
+ *     表名 / 表注释 / 字段名 / 字段注释。
+ * 例如 { key: "julia", keywords: ["julia year", "julia day"] }
+ *  → 输入 fieldGroupTrigger + julia 后，搜索栏 / Monaco 补全展示所有命中
+ *    "julia year"或"julia day"的表与字段。
+ *
+ * 触发符与「字段组」共用 fieldGroupTrigger；输入触发符 + key 时两者同时检索，
+ * 字段组结果在前、全局搜索组结果在后。
+ */
+export interface GlobalSearchGroup {
+  /** 组的唯一标识符（用户输入触发符后键入的部分） */
+  key: string;
+  /** 关键词列表；编辑界面用逗号分隔输入，保存时拆为数组 */
+  keywords: string[];
+}
+
 export interface TableCatalogEntry {
   /** Logical table name (e.g. GRADECLS); may match DDS basename */
   table: string;
@@ -354,16 +374,28 @@ export interface AppConfig {
   theme: UiTheme;
   /** Debug 模式：展示更完整的状态栏信息 */
   debugMode: boolean;
-/**
-   * 字段组触发符：在搜索栏或 SQL 编辑器中输入该符号后接字段组 key，
-   * 即可检索/补全该组的所有字段。例如 "#" → 输入 "#combined-id" 触发。
+  /**
+   * 字段组 + 全局搜索组（字段搜索）触发符：在搜索栏或 SQL 编辑器中输入该符号后接组 key，
+   * 可检索/补全该组的字段。例如 "#" → 输入 "#combined-id" 触发。
    */
   fieldGroupTrigger: string;
+  /**
+   * 表组触发符：与 fieldGroupTrigger 配套，但仅搜索表名 / 表注释。
+   * 例如 "$" → 输入 "$julia" 展示所有匹配全局搜索组关键词的 **表**（不含字段）。
+   * 默认 "$"。
+   */
+  tableGroupTrigger: string;
   /**
    * 字段组补全项的显示格式配置。
    * 用占位符自定义 Monaco 补全列表中每一行的左侧（主标签）和右侧（描述）内容。
    */
   fieldGroupCompletionFormat: FieldGroupCompletionFormat;
+  /**
+   * 全局搜索组列表。触发符与「字段组」共用 fieldGroupTrigger。
+   * 输入触发符 + 组 key 后，搜索栏 / Monaco 补全会用该组所有关键词去
+   * 匹配表名 / 表注释 / 字段名 / 字段注释。
+   */
+  globalSearchGroups: GlobalSearchGroup[];
   /**
    * 「快捷赋值」侧栏每行前序号图标的交互方式。
    *  - click    仅单击触发（带 250ms 去抖，双击不会重复触发）

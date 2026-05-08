@@ -5,6 +5,7 @@ import type {
 } from "../types";
 import { getSqlBlocks } from "./sqlBlocks";
 import { extractAliasedTables, tableKey } from "./sqlEditorOps";
+import { getCatalogIndex } from "./catalogIndex";
 
 export type JoinDriverMarkerOffset = {
   start: number;
@@ -12,8 +13,11 @@ export type JoinDriverMarkerOffset = {
   message: string;
 };
 
-function estRows(catalog: TableCatalogEntry[], key: string): number | undefined {
-  const t = catalog.find((c) => c.table.toUpperCase() === key.toUpperCase());
+function estRows(
+  byKey: Map<string, TableCatalogEntry>,
+  key: string,
+): number | undefined {
+  const t = byKey.get(key.toUpperCase());
   const n = t?.estimatedRowCount;
   if (n == null || typeof n !== "number" || !Number.isFinite(n) || n < 0) return undefined;
   return Math.floor(n);
@@ -119,7 +123,7 @@ function scanJoinsInBlock(
   baseOffset: number,
   blockStartLine: number,
   blockIndex1Based: number,
-  catalog: TableCatalogEntry[],
+  byKey: Map<string, TableCatalogEntry>,
   settings: SqlDiagnosticsSettings,
   relations: TableRelation[],
 ): JoinDriverMarkerOffset[] {
@@ -177,8 +181,8 @@ function scanJoinsInBlock(
       }
     }
 
-    const leftRows = estRows(catalog, leftKey);
-    const rightRows = estRows(catalog, rightKey);
+    const leftRows = estRows(byKey, leftKey);
+    const rightRows = estRows(byKey, rightKey);
     if (
       settings.enableJoinLargeDrivingSmallWarning &&
       leftRows != null &&
@@ -214,12 +218,13 @@ export function computeJoinDriverMarkerOffsets(
 ): JoinDriverMarkerOffset[] {
   const blocks = getSqlBlocks(sql);
   if (blocks.length === 0) return [];
+  const { byKey } = getCatalogIndex(catalog);
   const out: JoinDriverMarkerOffset[] = [];
   for (let bi = 0; bi < blocks.length; bi++) {
     const b = blocks[bi];
     const blockStartLine = lineNumberAtOffset(sql, b.start);
     out.push(
-      ...scanJoinsInBlock(b.text, b.start, blockStartLine, bi + 1, catalog, settings, relations),
+      ...scanJoinsInBlock(b.text, b.start, blockStartLine, bi + 1, byKey, settings, relations),
     );
   }
   return out;

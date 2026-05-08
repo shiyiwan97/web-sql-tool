@@ -48,7 +48,16 @@ export function SavedSqlPanel({
   const viewing = viewId ? slots.find((s) => s.id === viewId) : undefined;
   const [draftSql, setDraftSql] = useState("");
   const [paletteFor, setPaletteFor] = useState<{ id: string; x: number; y: number } | null>(null);
+  const [searchQ, setSearchQ] = useState("");
   const dragIdRef = useRef<string | null>(null);
+
+  // 搜索过滤（名称 + SQL 内容，大小写不敏感）
+  const filteredSlots = searchQ.trim()
+    ? slots.filter((s) => {
+        const q = searchQ.toLowerCase();
+        return s.name.toLowerCase().includes(q) || s.sql.toLowerCase().includes(q);
+      })
+    : slots;
 
   useEffect(() => {
     if (!viewing) return;
@@ -113,22 +122,54 @@ export function SavedSqlPanel({
         display: "flex",
         flexDirection: "column",
         minHeight: 0,
-        padding: 12,
-        overflow: "auto",
+        overflow: "hidden",
       }}
     >
+      {/* 搜索框 */}
+      <div style={{ padding: "8px 12px 6px", borderBottom: "1px solid var(--border)", flexShrink: 0 }}>
+        <input
+          className="input"
+          type="search"
+          placeholder="搜索名称 / SQL 内容…"
+          value={searchQ}
+          onChange={(e) => setSearchQ(e.target.value)}
+          style={{
+            width: "100%",
+            padding: "6px 10px",
+            fontSize: 12,
+            color: "var(--text)",
+            background: "var(--bg-app)",
+            border: "1px solid var(--border)",
+            borderRadius: 6,
+            outline: "none",
+            boxSizing: "border-box",
+          }}
+        />
+        {searchQ.trim() ? (
+          <div style={{ fontSize: 10, color: "var(--text-muted)", marginTop: 4 }}>
+            {filteredSlots.length} / {slots.length} 条
+          </div>
+        ) : null}
+      </div>
+
+      {/* 列表区 */}
+      <div style={{ flex: 1, minHeight: 0, padding: 12, overflow: "auto" }}>
       {slots.length === 0 ? (
         <p style={{ ...hint, marginTop: 0 }}>暂无存档；在编辑器中按下「保存到已存 SQL」快捷键即可自动添加。</p>
+      ) : filteredSlots.length === 0 ? (
+        <p style={{ ...hint, marginTop: 0 }}>没有匹配的结果。</p>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          {slots.map((r, i) => {
+          {filteredSlots.map((r) => {
+            // 投放目标改为 slots 里的真实索引
+            const realIndex = slots.indexOf(r);
             const rowBg = r.bgColor || ps.rowBackground || "var(--bg-elevated)";
             const isActive = r.id === activeSlotId;
             return (
               <div
                 key={r.id}
                 onDragOver={onDragOver}
-                onDrop={onDropAt(i)}
+                onDrop={onDropAt(realIndex)}
                 onClick={() => onSelectActive(r.id)}
                 onContextMenu={(e) => {
                   e.preventDefault();
@@ -206,7 +247,7 @@ export function SavedSqlPanel({
               </div>
             );
           })}
-          {/* 末尾投放区 */}
+          {/* 末尾投放区：允许拖到最后 */}
           <div
             onDragOver={onDragOver}
             onDrop={onDropAt(slots.length)}
@@ -215,6 +256,7 @@ export function SavedSqlPanel({
           />
         </div>
       )}
+      </div>{/* end 列表区 */}
 
       {/* 右键调色板 */}
       {paletteFor ? (
